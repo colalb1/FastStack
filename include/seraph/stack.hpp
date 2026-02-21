@@ -4,20 +4,25 @@
 #include <stdexcept>
 #include <vector>
 
-namespace seraph {
-    template <typename T> class Stack {
+namespace seraph
+{
+    template <typename T> class Stack
+    {
       private:
         std::vector<T> storage_;
 
       public:
         Stack() = default;
 
-        void push(T value) {
+        void push(T value)
+        {
             storage_.push_back(value);
         }
 
-        T pop() {
-            if (storage_.empty()) {
+        T pop()
+        {
+            if (storage_.empty())
+            {
                 throw std::out_of_range("Cannot pop from an empty stack");
             }
 
@@ -26,19 +31,23 @@ namespace seraph {
             return value;
         }
 
-        [[nodiscard]] T top() const {
-            if (storage_.empty()) {
+        [[nodiscard]] T top() const
+        {
+            if (storage_.empty())
+            {
                 throw std::out_of_range("Cannot read top of an empty stack");
             }
 
             return storage_.back();
         }
 
-        [[nodiscard]] bool empty() const noexcept {
+        [[nodiscard]] bool empty() const noexcept
+        {
             return storage_.empty();
         }
 
-        [[nodiscard]] std::size_t size() const noexcept {
+        [[nodiscard]] std::size_t size() const noexcept
+        {
             return storage_.size();
         }
 
