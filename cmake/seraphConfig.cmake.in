@@ -1,4 +1,4 @@
 @PACKAGE_INIT@
 
-include("${CMAKE_CURRENT_LIST_DIR}/faststackTargets.cmake")
-check_required_components(faststack)
+include("${CMAKE_CURRENT_LIST_DIR}/seraphTargets.cmake")
+check_required_components(seraph)

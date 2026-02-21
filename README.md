@@ -1,16 +1,11 @@
-# FastStack
+# Seraph
 
-FastStack is a C++ data-structure library focused on stack and queue implementations.
-
-## Platform Support
-
-FastStack currently supports **macOS on Apple Silicon (ARM64)** only.
-Configuration fails on unsupported platforms by design.
+Seraph is a C++ data-structure library for Apple ARM64.
 
 ## Project Layout
 
-- `include/faststack/stack.hpp`: stack API skeleton
-- `include/faststack/queue.hpp`: queue API skeleton
+- `include/seraph/stack.hpp`: stack API skeleton
+- `include/seraph/queue.hpp`: queue API skeleton
 - `tests/basic_compile_test.cpp`: basic compile/link smoke test
 - `src/`: implementation files (minimal scaffold)
 - `VERSION`: package semantic version (`MAJOR.MINOR.PATCH`)
@@ -29,8 +24,8 @@ ctest --test-dir build --output-on-failure
 ### Option 1: add_subdirectory (local checkout)
 
 ```cmake
-add_subdirectory(path/to/FastStack)
-target_link_libraries(my_app PRIVATE faststack::faststack)
+add_subdirectory(path/to/Seraph)
+target_link_libraries(my_app PRIVATE seraph::seraph)
 ```
 
 ### Option 2: FetchContent (remote source)
@@ -38,17 +33,17 @@ target_link_libraries(my_app PRIVATE faststack::faststack)
 ```cmake
 include(FetchContent)
 FetchContent_Declare(
-  faststack
-  GIT_REPOSITORY https://github.com/<you>/FastStack.git
+  seraph
+  GIT_REPOSITORY https://github.com/<you>/Seraph.git
   GIT_TAG main
 )
-FetchContent_MakeAvailable(faststack)
-target_link_libraries(my_app PRIVATE faststack::faststack)
+FetchContent_MakeAvailable(seraph)
+target_link_libraries(my_app PRIVATE seraph::seraph)
 ```
 
 ### Option 3: Installed package (find_package)
 
-Install FastStack:
+Install Seraph:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -59,8 +54,8 @@ cmake --install build --prefix "$HOME/.local"
 Use in another project:
 
 ```cmake
-find_package(faststack CONFIG REQUIRED)
-target_link_libraries(my_app PRIVATE faststack::faststack)
+find_package(seraph CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE seraph::seraph)
 ```
 
 ## Formatting
