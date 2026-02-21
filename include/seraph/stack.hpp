@@ -6,34 +6,32 @@
 
 namespace seraph
 {
-
-    class Stack
+    template <typename T> class Stack
     {
       private:
-        using value_type = int;
-        std::vector<value_type> storage_;
+        std::vector<T> storage_;
 
       public:
         Stack() = default;
 
-        void push(value_type value)
+        void push(T value)
         {
             storage_.push_back(value);
         }
 
-        value_type pop()
+        T pop()
         {
             if (storage_.empty())
             {
                 throw std::out_of_range("Cannot pop from an empty stack");
             }
 
-            value_type value = storage_.back();
+            T value = storage_.back();
             storage_.pop_back();
             return value;
         }
 
-        [[nodiscard]] value_type top() const
+        [[nodiscard]] T top() const
         {
             if (storage_.empty())
             {
