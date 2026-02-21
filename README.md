@@ -1,7 +1,5 @@
 # FastStack
 
-CHANGE THE NAME OF THIS LATER!!!
-
 FastStack is a C++ data-structure library focused on stack and queue implementations.
 
 ## Platform Support
@@ -15,6 +13,8 @@ Configuration fails on unsupported platforms by design.
 - `include/faststack/queue.hpp`: queue API skeleton
 - `tests/basic_compile_test.cpp`: basic compile/link smoke test
 - `src/`: implementation files (minimal scaffold)
+- `VERSION`: package semantic version (`MAJOR.MINOR.PATCH`)
+
 
 ## Build Locally
 
