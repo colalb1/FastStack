@@ -1,9 +1,9 @@
-#include "faststack/queue.hpp"
-#include "faststack/stack.hpp"
+#include "seraph/queue.hpp"
+#include "seraph/stack.hpp"
 
 int main()
 {
-    faststack::Stack stack;
+    seraph::Stack stack;
     stack.push(1);
     stack.push(2);
 
@@ -17,7 +17,7 @@ int main()
         return 1;
     }
 
-    faststack::Queue queue;
+    seraph::Queue queue;
     queue.enqueue(10);
     queue.enqueue(20);
 
