@@ -9,9 +9,11 @@ namespace seraph
 
     class Stack
     {
-      public:
+      private:
         using value_type = int;
+        std::vector<value_type> storage_;
 
+      public:
         Stack() = default;
 
         void push(value_type value)
@@ -54,9 +56,6 @@ namespace seraph
         // TODO(colin): Template this container so Stack supports generic value types.
         // TODO(colin): Add custom allocator support if performance goals require it.
         // TODO(colin): Evaluate small-buffer optimization to reduce heap allocations.
-
-      private:
-        std::vector<value_type> storage_;
     };
 
 } // namespace seraph
