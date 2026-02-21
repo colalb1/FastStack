@@ -4,5 +4,5 @@ Checks: >
   modernize-*,
   readability-*
 WarningsAsErrors: '*'
-HeaderFilterRegex: '.*'
+HeaderFilterRegex: '^(include|src|tests)/.*'
 FormatStyle: file
