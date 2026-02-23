@@ -5,8 +5,11 @@
 #include <atomic>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <stack>
 #include <stdexcept>
+#include <thread>
+#include <utility>
 #include <vector>
 
 // TODO:
