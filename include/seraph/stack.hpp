@@ -15,22 +15,26 @@
 namespace seraph {
     template <typename T> class SpinlockStack {
       private:
-        struct alignas(CacheLineSize) AlignedSpinlock {
-            Spinlock lock;
-        };
-
-        AlignedSpinlock lock_;
-
-        // Deque avoids reallocation delays under a spinlock.
-        std::deque<T> data_;
+        mutable Spinlock lock_;
+        std::vector<T> data_;
 
       public:
         SpinlockStack() = default;
 
-        void push(const T& value) {
-            SpinlockGuard guard(lock_);
+        explicit SpinlockStack(std::size_t reserve_hint) {
+            data_.reserve(reserve_hint);
+        }
 
-            data_.push_back(value);
+        void reserve(std::size_t n) {
+            SpinlockGuard guard(lock_);
+            data_.reserve(n);
+        }
+
+        void push(const T& value) {
+            T temp(value);
+
+            SpinlockGuard guard(lock_);
+            data_.push_back(std::move(temp));
         }
 
         void push(T&& value) {
@@ -46,7 +50,7 @@ namespace seraph {
             T temp(std::forward<Args>(args)...);
 
             SpinlockGuard guard(lock_);
-            data_.push_back(std::move(tmp));
+            data_.push_back(std::move(temp));
         }
 
         std::optional<T> pop() {
@@ -86,6 +90,11 @@ namespace seraph {
             SpinlockGuard guard(lock_);
 
             return data_.empty();
+        }
+
+        std::size_t size() const noexcept {
+            SpinlockGuard guard(lock_);
+            return data_.size();
         }
     };
 
