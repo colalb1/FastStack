@@ -52,12 +52,12 @@ namespace seraph {
                     return std::nullopt;
                 }
 
-                value = std::move(data_.back());
+                result.emplace(std::move(data_.back()));
                 data_.pop_back();
                 // Lock released
             }
 
-            return value;
+            return result;
         }
 
         std::optional<T> top() const {
