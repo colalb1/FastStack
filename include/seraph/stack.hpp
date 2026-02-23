@@ -21,11 +21,11 @@ namespace seraph {
       public:
         SpinlockStack() = default;
 
-        explicit SpinlockStack(std::size_t reserve_hint) {
+        explicit SpinlockStack(size_t reserve_hint) {
             data_.reserve(reserve_hint);
         }
 
-        void reserve(std::size_t n) {
+        void reserve(size_t n) {
             SpinlockGuard guard(lock_);
             data_.reserve(n);
         }
@@ -92,7 +92,7 @@ namespace seraph {
             return data_.empty();
         }
 
-        std::size_t size() const noexcept {
+        size_t size() const noexcept {
             SpinlockGuard guard(lock_);
             return data_.size();
         }
@@ -101,35 +101,82 @@ namespace seraph {
     // This is a Treiber stack: https://en.wikipedia.org/wiki/Treiber_stack
     template <typename T> class CASStack {
       private:
-        std::vector<T> storage_;
+        struct Node {
+            T value;
+            Node* next;
+
+            template <typename... Args>
+            explicit Node(Node* next_node, Args&&... args)
+                : value(std::forward<Args>(args)...), next(next_node) {}
+        };
+
+        std::atomic<Node*> head_{nullptr};
 
       public:
         CASStack() = default;
 
-        void push(T value) {
-            storage_.push_back(value);
+        ~CASStack() {
+            // Not safe under concurrent access.
+            Node* node = head_.load(std::memory_order_relaxed);
+
+            while (node) {
+                Node* next = node->next;
+                delete node;
+                node = next;
+            }
         }
 
-        T pop() {
-            if (storage_.empty()) {
-                throw std::out_of_range("Cannot pop from an empty stack");
-            }
+        // No copies.
+        CASStack(const CASStack&) = delete;
+        CASStack& operator=(const CASStack&) = delete;
 
-            T value = storage_.back();
-            storage_.pop_back();
-            return value;
+        void push(const T& value) {
+            emplace(value);
         }
 
-        T top() const {
-            if (storage_.empty()) {
-                throw std::out_of_range("Cannot read top of an empty stack");
+        void push(T&& value) {
+            emplace(std::move(value));
+        }
+
+        template <typename... Args> void emplace(Args&&... args) {
+            Node* new_node = new Node(nullptr, std::forward<Args>(args)...);
+            Node* old_head = head_.load(std::memory_order_relaxed);
+
+            do {
+                new_node->next = old_head;
+            } while (!head_.compare_exchange_weak(
+                    old_head,
+                    new_node,
+                    std::memory_order_release,
+                    std::memory_order_relaxed
+            ));
+        }
+
+        std::optional<T> pop() {
+            Node* old_head = head_.load(std::memory_order_acquire);
+
+            while (old_head) {
+                Node* next = old_head->next;
+
+                if (head_.compare_exchange_weak(
+                            old_head,
+                            next,
+                            std::memory_order_acquire,
+                            std::memory_order_relaxed
+                    )) {
+
+                    std::optional<T> result(std::move(old_head->value));
+                    delete old_head;
+
+                    return result;
+                }
             }
 
-            return storage_.back();
+            return std::nullopt;
         }
 
         bool empty() const noexcept {
-            return storage_.empty();
+            return head_.load(std::memory_order_acquire) == nullptr;
         }
     };
 
