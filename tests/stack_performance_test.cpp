@@ -4,7 +4,6 @@
 #include <atomic>
 #include <barrier>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
