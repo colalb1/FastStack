@@ -8,6 +8,8 @@ UseTab: Never
 ColumnLimit: 100
 ContinuationIndentWidth: 8
 
+AlwaysBreakTemplateDeclaractions: Yes
+
 # Braces and block readability
 BreakBeforeBraces: Custom
 BraceWrapping:
