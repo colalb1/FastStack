@@ -15,7 +15,11 @@
 namespace seraph {
     template <typename T> class SpinlockStack {
       private:
-        alignas(CacheLineSize) mutable Spinlock lock_;
+        struct alignas(CacheLineSize) AlignedSpinlock {
+            Spinlock lock;
+        };
+
+        AlignedSpinlock lock_;
 
         // Deque avoids reallocation delays under a spinlock.
         std::deque<T> data_;
@@ -68,8 +72,9 @@ namespace seraph {
 
             {
                 SpinlockGuard guard(lock_);
-                if (data_.empty())
+                if (data_.empty()) {
                     return std::nullopt;
+                }
 
                 result.emplace(data_.back());
             }
