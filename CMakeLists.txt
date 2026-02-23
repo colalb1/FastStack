@@ -45,6 +45,11 @@ if(SERAPH_BUILD_TESTS)
     )
     target_link_libraries(seraph_tests PRIVATE seraph::seraph)
     add_test(NAME seraph_tests COMMAND seraph_tests)
+
+    add_executable(seraph_stack_perf
+        tests/stack_performance_test.cpp
+    )
+    target_link_libraries(seraph_stack_perf PRIVATE seraph::seraph)
 endif()
 
 if(SERAPH_ENABLE_INSTALL)
