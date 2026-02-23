@@ -15,8 +15,10 @@
 namespace seraph {
     template <typename T> class SpinlockStack {
       private:
-        mutable Spinlock lock_;
-        std::vector<T> data_;
+        alignas(CacheLineSize) mutable Spinlock lock_;
+
+        // Deque avoids reallocation delays under a spinlock.
+        std::deque<T> data_;
 
       public:
         SpinlockStack() = default;
@@ -33,15 +35,27 @@ namespace seraph {
             data_.push_back(std::move(value));
         }
 
-        std::optional<T> pop() {
+        // Emplace support for perfect forwarding
+        template <typename... Args> void emplace(Args&&... args) {
             SpinlockGuard guard(lock_);
 
-            if (data_.empty()) {
-                return std::nullopt;
-            }
+            data_.emplace_back(std::forward<Args>(args)...);
+        }
 
-            T value = std::move(data_.back());
-            data_.pop_back();
+        std::optional<T> pop() {
+            T value;
+
+            {
+                SpinlockGuard guard(lock_);
+
+                if (data_.empty()) {
+                    return std::nullopt;
+                }
+
+                value = std::move(data_.back());
+                data_.pop_back();
+                // Lock released
+            }
 
             return value;
         }
@@ -56,12 +70,14 @@ namespace seraph {
             return data_.back();
         }
 
+        // Do not use for concurrency logic.
         bool empty() const noexcept {
             SpinlockGuard guard(lock_);
 
             return data_.empty();
         }
 
+        // Note: Result is stale immediately after return.
         std::size_t size() const noexcept {
             SpinlockGuard guard(lock_);
 
@@ -91,7 +107,7 @@ namespace seraph {
             return value;
         }
 
-        [[nodiscard]] T top() const {
+        T top() const {
             if (storage_.empty()) {
                 throw std::out_of_range("Cannot read top of an empty stack");
             }
@@ -99,17 +115,13 @@ namespace seraph {
             return storage_.back();
         }
 
-        [[nodiscard]] bool empty() const noexcept {
+        bool empty() const noexcept {
             return storage_.empty();
         }
 
-        [[nodiscard]] std::size_t size() const noexcept {
+        size_t size() const noexcept {
             return storage_.size();
         }
-
-        // TODO(colin): Template this container so Stack supports generic value types.
-        // TODO(colin): Add custom allocator support if performance goals require it.
-        // TODO(colin): Evaluate small-buffer optimization to reduce heap allocations.
     };
 
 } // namespace seraph
