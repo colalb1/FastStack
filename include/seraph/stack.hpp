@@ -64,13 +64,17 @@ namespace seraph {
         }
 
         std::optional<T> top() const {
-            SpinlockGuard guard(lock_);
+            std::optional<T> result;
 
-            if (data_.empty()) {
-                return std::nullopt;
+            {
+                SpinlockGuard guard(lock_);
+                if (data_.empty())
+                    return std::nullopt;
+
+                result.emplace(data_.back());
             }
 
-            return data_.back();
+            return result;
         }
 
         bool empty() const noexcept {
