@@ -2,28 +2,44 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
-#include <limits>
 #include <map>
 #include <optional>
+#include <sstream>
 #include <stack>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
     using Clock = std::chrono::steady_clock;
 
-    struct BenchmarkResult {
+    struct BenchmarkSample {
         std::string implementation;
         std::string operation;
         std::size_t iterations;
+        int repeat_index;
+        double total_ns;
         double nanoseconds_per_op;
         double ops_per_second;
+    };
+
+    struct BenchmarkAggregate {
+        std::string implementation;
+        std::string operation;
+        std::size_t iterations;
+        int repeats;
+        double avg_nanoseconds_per_op;
+        double avg_ops_per_second;
+        double min_nanoseconds_per_op;
+        double max_nanoseconds_per_op;
     };
 
     volatile std::uint64_t g_sink = 0;
@@ -89,187 +105,220 @@ namespace {
         throw std::runtime_error("Unable to find repository root from current working directory.");
     }
 
-    template <typename Fn> double best_time_ns(Fn&& fn, int repeats) {
-        double best = std::numeric_limits<double>::infinity();
-        for (int iii = 0; iii < repeats; ++iii) {
+    template <typename Fn>
+    std::vector<BenchmarkSample> run_samples(
+            std::string_view impl_name,
+            std::string_view operation,
+            std::size_t iterations,
+            int repeats,
+            Fn&& fn
+    ) {
+        std::vector<BenchmarkSample> samples;
+        samples.reserve(static_cast<std::size_t>(repeats));
+
+        for (int repeat = 0; repeat < repeats; ++repeat) {
             const auto start = Clock::now();
             fn();
             const auto stop = Clock::now();
-            const auto elapsed_ns = std::chrono::duration<double, std::nano>(stop - start).count();
-            best = std::min(best, elapsed_ns);
+            const double measured_ns =
+                    std::chrono::duration<double, std::nano>(stop - start).count();
+            const double total_ns = std::max(1.0, measured_ns);
+            const double ns_per_op = total_ns / static_cast<double>(iterations);
+            const double ops_per_sec = 1e9 / ns_per_op;
+
+            samples.push_back(BenchmarkSample{
+                    .implementation = std::string(impl_name),
+                    .operation = std::string(operation),
+                    .iterations = iterations,
+                    .repeat_index = repeat,
+                    .total_ns = total_ns,
+                    .nanoseconds_per_op = ns_per_op,
+                    .ops_per_second = ops_per_sec,
+            });
         }
-        return best;
-    }
 
-    BenchmarkResult make_result(
-            std::string implementation,
-            std::string operation,
-            std::size_t iterations,
-            double total_ns
-    ) {
-        const double ns_per_op = total_ns / static_cast<double>(iterations);
-        const double ops_per_sec = 1e9 / ns_per_op;
-        return BenchmarkResult{
-                .implementation = std::move(implementation),
-                .operation = std::move(operation),
-                .iterations = iterations,
-                .nanoseconds_per_op = ns_per_op,
-                .ops_per_second = ops_per_sec,
-        };
+        return samples;
     }
 
     template <typename Stack>
-    BenchmarkResult
+    std::vector<BenchmarkSample>
     bench_push_copy(std::string_view impl_name, std::size_t iterations, int repeats) {
-        const double elapsed_ns = best_time_ns(
-                [iterations]() {
-                    Stack stack;
-                    const int value = 42;
-                    for (std::size_t iii = 0; iii < iterations; ++iii) {
-                        stack.push(value);
-                    }
-                    g_sink += stack.size();
-                },
-                repeats
-        );
-        return make_result(std::string(impl_name), "push_copy", iterations, elapsed_ns);
+        return run_samples(impl_name, "push_copy", iterations, repeats, [iterations]() {
+            Stack stack;
+            const int value = 42;
+            for (std::size_t iii = 0; iii < iterations; ++iii) {
+                stack.push(value);
+            }
+            g_sink += stack.size();
+        });
     }
 
     template <typename Stack>
-    BenchmarkResult
+    std::vector<BenchmarkSample>
     bench_push_move(std::string_view impl_name, std::size_t iterations, int repeats) {
-        const double elapsed_ns = best_time_ns(
-                [iterations]() {
-                    Stack stack;
-                    for (std::size_t iii = 0; iii < iterations; ++iii) {
-                        int value = static_cast<int>(iii);
-                        stack.push(std::move(value));
-                    }
-                    g_sink += stack.size();
-                },
-                repeats
-        );
-        return make_result(std::string(impl_name), "push_move", iterations, elapsed_ns);
+        return run_samples(impl_name, "push_move", iterations, repeats, [iterations]() {
+            Stack stack;
+            for (std::size_t iii = 0; iii < iterations; ++iii) {
+                int value = static_cast<int>(iii);
+                stack.push(std::move(value));
+            }
+            g_sink += stack.size();
+        });
     }
 
     template <typename Stack>
-    BenchmarkResult bench_emplace(std::string_view impl_name, std::size_t iterations, int repeats) {
-        const double elapsed_ns = best_time_ns(
-                [iterations]() {
-                    Stack stack;
-                    for (std::size_t iii = 0; iii < iterations; ++iii) {
-                        stack.emplace(static_cast<int>(iii));
-                    }
-                    g_sink += stack.size();
-                },
-                repeats
-        );
-        return make_result(std::string(impl_name), "emplace", iterations, elapsed_ns);
+    std::vector<BenchmarkSample>
+    bench_emplace(std::string_view impl_name, std::size_t iterations, int repeats) {
+        return run_samples(impl_name, "emplace", iterations, repeats, [iterations]() {
+            Stack stack;
+            for (std::size_t iii = 0; iii < iterations; ++iii) {
+                stack.emplace(static_cast<int>(iii));
+            }
+            g_sink += stack.size();
+        });
     }
 
     template <typename Stack>
-    BenchmarkResult bench_pop(std::string_view impl_name, std::size_t iterations, int repeats) {
-        const double elapsed_ns = best_time_ns(
-                [iterations]() {
-                    Stack stack;
-                    for (std::size_t iii = 0; iii < iterations; ++iii) {
-                        stack.emplace(static_cast<int>(iii));
-                    }
+    std::vector<BenchmarkSample>
+    bench_pop(std::string_view impl_name, std::size_t iterations, int repeats) {
+        return run_samples(impl_name, "pop", iterations, repeats, [iterations]() {
+            Stack stack;
+            for (std::size_t iii = 0; iii < iterations; ++iii) {
+                stack.emplace(static_cast<int>(iii));
+            }
 
-                    std::uint64_t local_sum = 0;
-                    for (std::size_t iii = 0; iii < iterations; ++iii) {
-                        auto value = stack.pop();
-                        if (value.has_value()) {
-                            local_sum += static_cast<std::uint64_t>(*value);
-                        }
-                    }
-                    g_sink += local_sum;
-                },
-                repeats
-        );
-        return make_result(std::string(impl_name), "pop", iterations, elapsed_ns);
+            std::uint64_t local_sum = 0;
+            for (std::size_t iii = 0; iii < iterations; ++iii) {
+                auto value = stack.pop();
+                if (value.has_value()) {
+                    local_sum += static_cast<std::uint64_t>(*value);
+                }
+            }
+            g_sink += local_sum;
+        });
     }
 
     template <typename Stack>
-    BenchmarkResult bench_size(std::string_view impl_name, std::size_t iterations, int repeats) {
-        const double elapsed_ns = best_time_ns(
-                [iterations]() {
-                    Stack stack;
-                    for (std::size_t iii = 0; iii < 1024; ++iii) {
-                        stack.emplace(static_cast<int>(iii));
-                    }
+    std::vector<BenchmarkSample>
+    bench_size(std::string_view impl_name, std::size_t iterations, int repeats) {
+        return run_samples(impl_name, "size", iterations, repeats, [iterations]() {
+            Stack stack;
+            for (std::size_t iii = 0; iii < 1024; ++iii) {
+                stack.emplace(static_cast<int>(iii));
+            }
 
-                    std::uint64_t local_sum = 0;
-                    for (std::size_t iii = 0; iii < iterations; ++iii) {
-                        local_sum += stack.size();
-                    }
-                    g_sink += local_sum;
-                },
-                repeats
-        );
-        return make_result(std::string(impl_name), "size", iterations, elapsed_ns);
+            std::uint64_t local_sum = 0;
+            for (std::size_t iii = 0; iii < iterations; ++iii) {
+                local_sum += stack.size();
+            }
+            g_sink += local_sum;
+        });
     }
 
     template <typename Stack>
-    BenchmarkResult bench_empty(std::string_view impl_name, std::size_t iterations, int repeats) {
-        const double elapsed_ns = best_time_ns(
-                [iterations]() {
-                    Stack stack;
-                    stack.emplace(1);
-                    std::uint64_t local_sum = 0;
-                    for (std::size_t iii = 0; iii < iterations; ++iii) {
-                        local_sum += static_cast<std::uint64_t>(stack.empty());
-                    }
-                    g_sink += local_sum;
-                },
-                repeats
-        );
-        return make_result(std::string(impl_name), "empty", iterations, elapsed_ns);
+    std::vector<BenchmarkSample>
+    bench_empty(std::string_view impl_name, std::size_t iterations, int repeats) {
+        return run_samples(impl_name, "empty", iterations, repeats, [iterations]() {
+            Stack stack;
+            stack.emplace(1);
+            std::uint64_t local_sum = 0;
+            for (std::size_t iii = 0; iii < iterations; ++iii) {
+                local_sum += static_cast<std::uint64_t>(stack.empty());
+            }
+            g_sink += local_sum;
+        });
     }
 
     template <typename Stack>
-    BenchmarkResult bench_top(std::string_view impl_name, std::size_t iterations, int repeats) {
-        const double elapsed_ns = best_time_ns(
-                [iterations]() {
-                    Stack stack;
-                    stack.emplace(7);
-                    std::uint64_t local_sum = 0;
-                    for (std::size_t iii = 0; iii < iterations; ++iii) {
-                        auto value = stack.top();
-                        if (value.has_value()) {
-                            local_sum += static_cast<std::uint64_t>(*value);
-                        }
-                    }
-                    g_sink += local_sum;
-                },
-                repeats
-        );
-        return make_result(std::string(impl_name), "top", iterations, elapsed_ns);
+    std::vector<BenchmarkSample>
+    bench_top(std::string_view impl_name, std::size_t iterations, int repeats) {
+        return run_samples(impl_name, "top", iterations, repeats, [iterations]() {
+            Stack stack;
+            stack.emplace(7);
+            std::uint64_t local_sum = 0;
+            for (std::size_t iii = 0; iii < iterations; ++iii) {
+                auto value = stack.top();
+                if (value.has_value()) {
+                    local_sum += static_cast<std::uint64_t>(*value);
+                }
+            }
+            g_sink += local_sum;
+        });
     }
 
-    BenchmarkResult bench_reserve_spinlock(std::size_t iterations, int repeats) {
-        const double elapsed_ns = best_time_ns(
-                [iterations]() {
-                    seraph::SpinlockStack<int> stack;
-                    for (std::size_t iii = 1; iii <= iterations; ++iii) {
-                        stack.reserve(iii);
-                    }
-                    g_sink += stack.size();
-                },
-                repeats
-        );
-        return make_result("SpinlockStack", "reserve", iterations, elapsed_ns);
+    std::vector<BenchmarkSample> bench_reserve_spinlock(std::size_t iterations, int repeats) {
+        return run_samples("SpinlockStack", "reserve", iterations, repeats, [iterations]() {
+            seraph::SpinlockStack<int> stack;
+            for (std::size_t iii = 1; iii <= iterations; ++iii) {
+                stack.reserve(iii);
+            }
+            g_sink += stack.size();
+        });
+    }
+
+    std::vector<BenchmarkAggregate> build_aggregates(const std::vector<BenchmarkSample>& samples) {
+        std::vector<BenchmarkAggregate> aggregates;
+        std::map<std::pair<std::string, std::string>, std::vector<const BenchmarkSample*>> grouped;
+
+        for (const auto& sample : samples) {
+            grouped[{sample.implementation, sample.operation}].push_back(&sample);
+        }
+
+        for (const auto& [key, group] : grouped) {
+            const auto& impl = key.first;
+            const auto& op = key.second;
+
+            double sum_ns_per_op = 0.0;
+            double sum_ops_per_sec = 0.0;
+            double min_ns_per_op = group.front()->nanoseconds_per_op;
+            double max_ns_per_op = group.front()->nanoseconds_per_op;
+
+            for (const auto* sample : group) {
+                sum_ns_per_op += sample->nanoseconds_per_op;
+                sum_ops_per_sec += sample->ops_per_second;
+                min_ns_per_op = std::min(min_ns_per_op, sample->nanoseconds_per_op);
+                max_ns_per_op = std::max(max_ns_per_op, sample->nanoseconds_per_op);
+            }
+
+            const double count = static_cast<double>(group.size());
+            aggregates.push_back(BenchmarkAggregate{
+                    .implementation = impl,
+                    .operation = op,
+                    .iterations = group.front()->iterations,
+                    .repeats = static_cast<int>(group.size()),
+                    .avg_nanoseconds_per_op = sum_ns_per_op / count,
+                    .avg_ops_per_second = sum_ops_per_sec / count,
+                    .min_nanoseconds_per_op = min_ns_per_op,
+                    .max_nanoseconds_per_op = max_ns_per_op,
+            });
+        }
+
+        return aggregates;
     }
 
     void write_results_csv(
-            const std::vector<BenchmarkResult>& results,
+            const std::vector<BenchmarkSample>& samples,
+            const std::vector<BenchmarkAggregate>& aggregates,
+            int repeats,
             const std::filesystem::path& output_path
     ) {
         std::ofstream out(output_path);
-        out << "implementation,operation,iterations,ns_per_op,ops_per_sec\n";
-        for (const auto& result : results) {
-            out << result.implementation << "," << result.operation << "," << result.iterations
-                << "," << result.nanoseconds_per_op << "," << result.ops_per_second << "\n";
+        out << "record_type,implementation,operation,iterations,repeats,repeat_index,total_ns,ns_"
+               "per_op,ops_per_sec,min_ns_per_op,max_ns_per_op,avg_ns_per_op,avg_ops_per_sec\n";
+
+        for (const auto& sample : samples) {
+            out << "sample," << sample.implementation << "," << sample.operation << ","
+                << sample.iterations << "," << repeats << "," << sample.repeat_index << ","
+                << sample.total_ns << "," << sample.nanoseconds_per_op << ","
+                << sample.ops_per_second << ",,,\n";
+        }
+
+        for (const auto& aggregate : aggregates) {
+            out << "average," << aggregate.implementation << "," << aggregate.operation << ","
+                << aggregate.iterations << "," << aggregate.repeats << ",,,,"
+                << aggregate.min_nanoseconds_per_op << "," << aggregate.max_nanoseconds_per_op
+                << "," << aggregate.avg_nanoseconds_per_op << "," << aggregate.avg_ops_per_second
+                << "\n";
         }
     }
 
@@ -283,13 +332,19 @@ namespace {
         return "#e76f51";
     }
 
+    std::string format_metric(double value) {
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(value >= 100.0 ? 1 : 2) << value;
+        return ss.str();
+    }
+
     void write_svg_grouped_bars(
-            const std::vector<BenchmarkResult>& results,
+            const std::vector<BenchmarkAggregate>& aggregates,
             const std::filesystem::path& output_path,
             bool use_ns_metric
     ) {
         std::vector<std::string> operations;
-        for (const auto& result : results) {
+        for (const auto& result : aggregates) {
             if (std::find(operations.begin(), operations.end(), result.operation) ==
                 operations.end()) {
                 operations.push_back(result.operation);
@@ -300,8 +355,9 @@ namespace {
 
         std::map<std::string, std::map<std::string, double>> metric_by_op_impl;
         double max_metric = 0.0;
-        for (const auto& result : results) {
-            const double metric = use_ns_metric ? result.nanoseconds_per_op : result.ops_per_second;
+        for (const auto& result : aggregates) {
+            const double metric =
+                    use_ns_metric ? result.avg_nanoseconds_per_op : result.avg_ops_per_second;
             metric_by_op_impl[result.operation][result.implementation] = metric;
             max_metric = std::max(max_metric, metric);
         }
@@ -315,7 +371,7 @@ namespace {
         const double plot_w = static_cast<double>(width - margin_left - margin_right);
         const double plot_h = static_cast<double>(height - margin_top - margin_bottom);
         const double group_w = plot_w / static_cast<double>(operations.size());
-        const double bar_w = group_w / 4.0;
+        const double bar_w = group_w / 5.0;
 
         std::ofstream out(output_path);
         out << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" << width << "\" height=\""
@@ -324,8 +380,7 @@ namespace {
             << "\" fill=\"#ffffff\"/>\n";
         out << "<text x=\"" << width / 2
             << "\" y=\"40\" text-anchor=\"middle\" font-size=\"26\" font-family=\"Menlo, "
-               "monospace\" "
-               "fill=\"#111111\">Stack Performance: "
+               "monospace\" fill=\"#111111\">Stack Performance Average: "
             << (use_ns_metric ? "ns/op (lower is better)" : "ops/sec (higher is better)")
             << "</text>\n";
 
@@ -339,7 +394,7 @@ namespace {
             out << "<text x=\"" << (margin_left - 10) << "\" y=\"" << (y + 4)
                 << "\" text-anchor=\"end\" font-size=\"12\" font-family=\"Menlo, monospace\" "
                    "fill=\"#444444\">"
-                << value << "</text>\n";
+                << format_metric(value) << "</text>\n";
         }
 
         out << "<line x1=\"" << margin_left << "\" y1=\"" << margin_top << "\" x2=\"" << margin_left
@@ -380,11 +435,15 @@ namespace {
 
                 out << "<rect x=\"" << x << "\" y=\"" << y << "\" width=\"" << bar_w
                     << "\" height=\"" << bar_h << "\" fill=\"" << color_for_impl(impl) << "\"/>\n";
+                out << "<text x=\"" << (x + bar_w / 2.0) << "\" y=\"" << (y - 6)
+                    << "\" text-anchor=\"middle\" font-size=\"10\" font-family=\"Menlo, "
+                       "monospace\" fill=\"#222222\">"
+                    << format_metric(metric) << "</text>\n";
             }
 
             out << "<text x=\"" << center << "\" y=\"" << (height - margin_bottom + 20)
-                << "\" text-anchor=\"middle\" font-size=\"12\" font-family=\"Menlo, monospace\" "
-                   "fill=\"#222222\">"
+                << "\" text-anchor=\"middle\" font-size=\"12\" font-family=\"Menlo, "
+                   "monospace\" fill=\"#222222\">"
                 << op << "</text>\n";
         }
 
@@ -406,6 +465,7 @@ namespace {
 int main(int argc, char** argv) {
     bool quick = false;
     bool allow_debug = false;
+
     for (int iii = 1; iii < argc; ++iii) {
         const std::string arg(argv[iii]);
         if (arg == "--quick") {
@@ -428,40 +488,50 @@ int main(int argc, char** argv) {
     const std::size_t iterations = quick ? 20'000 : 300'000;
     const int repeats = quick ? 2 : 5;
 
-    std::vector<BenchmarkResult> results;
-    results.reserve(32);
+    std::vector<BenchmarkSample> samples;
+    samples.reserve(256);
+
+    auto append_samples = [&samples](std::vector<BenchmarkSample> chunk) {
+        samples.insert(
+                samples.end(),
+                std::make_move_iterator(chunk.begin()),
+                std::make_move_iterator(chunk.end())
+        );
+    };
 
     using Spinlock = seraph::SpinlockStack<int>;
     using CAS = seraph::CASStack<int>;
     using STL = STLStackAdapter;
 
-    results.push_back(bench_push_copy<Spinlock>("SpinlockStack", iterations, repeats));
-    results.push_back(bench_push_copy<CAS>("CASStack", iterations, repeats));
-    results.push_back(bench_push_copy<STL>("STLStack", iterations, repeats));
+    append_samples(bench_push_copy<Spinlock>("SpinlockStack", iterations, repeats));
+    append_samples(bench_push_copy<CAS>("CASStack", iterations, repeats));
+    append_samples(bench_push_copy<STL>("STLStack", iterations, repeats));
 
-    results.push_back(bench_push_move<Spinlock>("SpinlockStack", iterations, repeats));
-    results.push_back(bench_push_move<CAS>("CASStack", iterations, repeats));
-    results.push_back(bench_push_move<STL>("STLStack", iterations, repeats));
+    append_samples(bench_push_move<Spinlock>("SpinlockStack", iterations, repeats));
+    append_samples(bench_push_move<CAS>("CASStack", iterations, repeats));
+    append_samples(bench_push_move<STL>("STLStack", iterations, repeats));
 
-    results.push_back(bench_emplace<Spinlock>("SpinlockStack", iterations, repeats));
-    results.push_back(bench_emplace<CAS>("CASStack", iterations, repeats));
-    results.push_back(bench_emplace<STL>("STLStack", iterations, repeats));
+    append_samples(bench_emplace<Spinlock>("SpinlockStack", iterations, repeats));
+    append_samples(bench_emplace<CAS>("CASStack", iterations, repeats));
+    append_samples(bench_emplace<STL>("STLStack", iterations, repeats));
 
-    results.push_back(bench_pop<Spinlock>("SpinlockStack", iterations, repeats));
-    results.push_back(bench_pop<CAS>("CASStack", iterations, repeats));
-    results.push_back(bench_pop<STL>("STLStack", iterations, repeats));
+    append_samples(bench_pop<Spinlock>("SpinlockStack", iterations, repeats));
+    append_samples(bench_pop<CAS>("CASStack", iterations, repeats));
+    append_samples(bench_pop<STL>("STLStack", iterations, repeats));
 
-    results.push_back(bench_size<Spinlock>("SpinlockStack", iterations, repeats));
-    results.push_back(bench_size<CAS>("CASStack", iterations, repeats));
-    results.push_back(bench_size<STL>("STLStack", iterations, repeats));
+    append_samples(bench_size<Spinlock>("SpinlockStack", iterations, repeats));
+    append_samples(bench_size<CAS>("CASStack", iterations, repeats));
+    append_samples(bench_size<STL>("STLStack", iterations, repeats));
 
-    results.push_back(bench_empty<Spinlock>("SpinlockStack", iterations, repeats));
-    results.push_back(bench_empty<CAS>("CASStack", iterations, repeats));
-    results.push_back(bench_empty<STL>("STLStack", iterations, repeats));
+    append_samples(bench_empty<Spinlock>("SpinlockStack", iterations, repeats));
+    append_samples(bench_empty<CAS>("CASStack", iterations, repeats));
+    append_samples(bench_empty<STL>("STLStack", iterations, repeats));
 
-    results.push_back(bench_top<Spinlock>("SpinlockStack", iterations, repeats));
-    results.push_back(bench_top<STL>("STLStack", iterations, repeats));
-    results.push_back(bench_reserve_spinlock(iterations, repeats));
+    append_samples(bench_top<Spinlock>("SpinlockStack", iterations, repeats));
+    append_samples(bench_top<STL>("STLStack", iterations, repeats));
+    append_samples(bench_reserve_spinlock(iterations, repeats));
+
+    const auto aggregates = build_aggregates(samples);
 
     const auto repo_root = find_repo_root();
     const auto output_dir = repo_root / "tests" / "perf_results";
@@ -471,14 +541,14 @@ int main(int argc, char** argv) {
     const auto ns_svg_path = output_dir / "stack_ns_per_op.svg";
     const auto ops_svg_path = output_dir / "stack_ops_per_sec.svg";
 
-    write_results_csv(results, csv_path);
-    write_svg_grouped_bars(results, ns_svg_path, true);
-    write_svg_grouped_bars(results, ops_svg_path, false);
+    write_results_csv(samples, aggregates, repeats, csv_path);
+    write_svg_grouped_bars(aggregates, ns_svg_path, true);
+    write_svg_grouped_bars(aggregates, ops_svg_path, false);
 
     std::cout << "Stack performance benchmark complete.\n";
     std::cout << "Results CSV: " << csv_path << "\n";
-    std::cout << "Graph (ns/op): " << ns_svg_path << "\n";
-    std::cout << "Graph (ops/sec): " << ops_svg_path << "\n";
+    std::cout << "Graph (ns/op, averaged): " << ns_svg_path << "\n";
+    std::cout << "Graph (ops/sec, averaged): " << ops_svg_path << "\n";
     std::cout << "Sink: " << g_sink << "\n";
 
     return 0;
