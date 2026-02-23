@@ -37,9 +37,12 @@ namespace seraph {
 
         // Emplace support for perfect forwarding
         template <typename... Args> void emplace(Args&&... args) {
-            SpinlockGuard guard(lock_);
+            // Constructing the object outside of the spinlock because
+            // an expensive creation creates long spins & wastes CPU.
+            T temp(std::forward<Args>(args)...);
 
-            data_.emplace_back(std::forward<Args>(args)...);
+            SpinlockGuard guard(lock_);
+            data_.push_back(std::move(tmp));
         }
 
         std::optional<T> pop() {
