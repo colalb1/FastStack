@@ -461,6 +461,14 @@ namespace {
                "monospace\" fill=\"#111111\">Stack Performance Average: "
             << (use_ns_metric ? "ns/op (lower is better)" : "ops/sec (higher is better)")
             << "</text>\n";
+        out << "<text x=\"28\" y=\"" << (margin_top + plot_h / 2.0)
+            << "\" text-anchor=\"middle\" font-size=\"13\" font-family=\"Menlo, monospace\" "
+               "fill=\"#222222\" transform=\"rotate(-90 28 "
+            << (margin_top + plot_h / 2.0) << ")\">" << (use_ns_metric ? "ns/op" : "ops/sec")
+            << "</text>\n";
+        out << "<text x=\"" << (margin_left + plot_w / 2.0) << "\" y=\"" << (height - 18)
+            << "\" text-anchor=\"middle\" font-size=\"13\" font-family=\"Menlo, monospace\" "
+               "fill=\"#222222\">operation</text>\n";
 
         for (int tick = 0; tick <= 5; ++tick) {
             const double ratio = static_cast<double>(tick) / 5.0;
@@ -519,10 +527,11 @@ namespace {
                     << format_metric(metric) << "</text>\n";
             }
 
-            out << "<text x=\"" << center << "\" y=\"" << (height - margin_bottom + 20)
+            const double label_y = height - margin_bottom + 20;
+            out << "<text x=\"" << center << "\" y=\"" << label_y
                 << "\" text-anchor=\"middle\" font-size=\"12\" font-family=\"Menlo, "
-                   "monospace\" fill=\"#222222\">"
-                << op << "</text>\n";
+                   "monospace\" fill=\"#222222\" transform=\"rotate(28 "
+                << center << " " << label_y << ")\">" << op << "</text>\n";
         }
 
         const int legend_y = 60;
@@ -575,14 +584,18 @@ namespace {
         return true;
     }
 
-    std::string color_for_series(int push_percent) {
-        if (push_percent == 80) {
-            return "#1d3557";
-        }
-        if (push_percent == 50) {
-            return "#2a9d8f";
-        }
-        return "#e76f51";
+    std::string color_for_series_index(std::size_t index) {
+        static const std::vector<std::string> palette = {
+                "#1d3557",
+                "#e76f51",
+                "#2a9d8f",
+                "#f4a261",
+                "#6a4c93",
+                "#1982c4",
+                "#8ac926",
+                "#ff595e",
+        };
+        return palette[index % palette.size()];
     }
 
     void write_contention_svg(
@@ -685,15 +698,9 @@ namespace {
         }
 
         int legend_y = 90;
+        std::size_t series_index = 0;
         for (const auto& [key, points] : series) {
-            int push_percent = 50;
-            if (key.find("80/20") != std::string::npos) {
-                push_percent = 80;
-            }
-            else if (key.find("20/80") != std::string::npos) {
-                push_percent = 20;
-            }
-            const std::string color = color_for_series(push_percent);
+            const std::string color = color_for_series_index(series_index);
 
             std::string polyline_points;
             for (const auto& point : points) {
@@ -713,6 +720,7 @@ namespace {
                 << "\" font-size=\"12\" font-family=\"Menlo, monospace\" fill=\"#222222\">" << key
                 << "</text>\n";
             legend_y += 24;
+            ++series_index;
         }
 
         out << "</svg>\n";
