@@ -1,101 +1,81 @@
 #pragma once
 
+#include "locks.hpp"
+
+#include <atomic>
 #include <cstddef>
+#include <memory>
+#include <stack>
 #include <stdexcept>
 #include <vector>
 
-// Need three versions: atomic, spinlock, compare-and-swap
+// TODO:
+//  1. Spinlock
+//  2. Compare-and-Swap
 namespace seraph {
-    template <typename T> class AtomicStack {
-      private:
-        std::vector<T> storage_;
-
-      public:
-        Stack() = default;
-
-        void push(T value) {
-            storage_.push_back(value);
-        }
-
-        T pop() {
-            if (storage_.empty()) {
-                throw std::out_of_range("Cannot pop from an empty stack");
-            }
-
-            T value = storage_.back();
-            storage_.pop_back();
-            return value;
-        }
-
-        [[nodiscard]] T top() const {
-            if (storage_.empty()) {
-                throw std::out_of_range("Cannot read top of an empty stack");
-            }
-
-            return storage_.back();
-        }
-
-        [[nodiscard]] bool empty() const noexcept {
-            return storage_.empty();
-        }
-
-        [[nodiscard]] std::size_t size() const noexcept {
-            return storage_.size();
-        }
-
-        // TODO(colin): Template this container so Stack supports generic value types.
-        // TODO(colin): Add custom allocator support if performance goals require it.
-        // TODO(colin): Evaluate small-buffer optimization to reduce heap allocations.
-    };
-
     template <typename T> class SpinlockStack {
       private:
-        std::vector<T> storage_;
+        mutable Spinlock lock_;
+        std::vector<T> data_;
 
       public:
-        Stack() = default;
+        SpinlockStack() = default;
 
-        void push(T value) {
-            storage_.push_back(value);
+        void push(const T& value) {
+            SpinlockGuard guard(lock_);
+
+            data_.push_back(value);
         }
 
-        T pop() {
-            if (storage_.empty()) {
-                throw std::out_of_range("Cannot pop from an empty stack");
+        void push(T&& value) {
+            SpinlockGuard guard(lock_);
+
+            data_.push_back(std::move(value));
+        }
+
+        std::optional<T> pop() {
+            SpinlockGuard guard(lock_);
+
+            if (data_.empty()) {
+                return std::nullopt;
             }
 
-            T value = storage_.back();
-            storage_.pop_back();
+            T value = std::move(data_.back());
+            data_.pop_back();
+
             return value;
         }
 
-        [[nodiscard]] T top() const {
-            if (storage_.empty()) {
-                throw std::out_of_range("Cannot read top of an empty stack");
+        std::optional<T> top() const {
+            SpinlockGuard guard(lock_);
+
+            if (data_.empty()) {
+                return std::nullopt;
             }
 
-            return storage_.back();
+            return data_.back();
         }
 
-        [[nodiscard]] bool empty() const noexcept {
-            return storage_.empty();
+        bool empty() const noexcept {
+            SpinlockGuard guard(lock_);
+
+            return data_.empty();
         }
 
-        [[nodiscard]] std::size_t size() const noexcept {
-            return storage_.size();
-        }
+        std::size_t size() const noexcept {
+            SpinlockGuard guard(lock_);
 
-        // TODO(colin): Template this container so Stack supports generic value types.
-        // TODO(colin): Add custom allocator support if performance goals require it.
-        // TODO(colin): Evaluate small-buffer optimization to reduce heap allocations.
+            return data_.size();
+        }
     };
 
+    // This is a Treiber stack: https://en.wikipedia.org/wiki/Treiber_stack
     template <typename T> class CASStack {
       private:
         std::vector<T> storage_;
 
       public:
-        Stack() = default;
+        CASStack() = default;
 
         void push(T value) {
             storage_.push_back(value);
