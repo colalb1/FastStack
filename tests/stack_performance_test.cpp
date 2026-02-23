@@ -1,6 +1,8 @@
 #include "seraph/stack.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <barrier>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -15,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -256,6 +259,82 @@ namespace {
         });
     }
 
+    std::string make_contention_operation_label(int thread_count, int push_percent) {
+        const int pop_percent = 100 - push_percent;
+        return "contention_t" + std::to_string(thread_count) + "_push" +
+               std::to_string(push_percent) + "_pop" + std::to_string(pop_percent);
+    }
+
+    template <typename Stack>
+    std::vector<BenchmarkSample> bench_contention_mix(
+            std::string_view impl_name,
+            int thread_count,
+            int push_percent,
+            std::size_t ops_per_thread,
+            int repeats
+    ) {
+        const std::size_t total_ops = static_cast<std::size_t>(thread_count) * ops_per_thread;
+        const std::string op_label = make_contention_operation_label(thread_count, push_percent);
+        return run_samples(
+                impl_name,
+                op_label,
+                total_ops,
+                repeats,
+                [thread_count, push_percent, ops_per_thread]() {
+                    Stack stack;
+                    for (std::size_t iii = 0;
+                         iii < static_cast<std::size_t>(thread_count) * ops_per_thread;
+                         ++iii) {
+                        stack.emplace(static_cast<int>(iii));
+                    }
+
+                    std::barrier sync_start(thread_count + 1);
+                    std::atomic<std::uint64_t> pop_sum{0};
+
+                    std::vector<std::thread> workers;
+                    workers.reserve(static_cast<std::size_t>(thread_count));
+
+                    for (int thread_index = 0; thread_index < thread_count; ++thread_index) {
+                        workers.emplace_back([&, thread_index]() {
+                            std::uint64_t seed = 0x9e3779b97f4a7c15ULL ^
+                                                 static_cast<std::uint64_t>(thread_index + 1);
+                            std::uint64_t local_sum = 0;
+
+                            sync_start.arrive_and_wait();
+                            for (std::size_t iii = 0; iii < ops_per_thread; ++iii) {
+                                seed ^= seed << 13;
+                                seed ^= seed >> 7;
+                                seed ^= seed << 17;
+
+                                const int roll = static_cast<int>(seed % 100ULL);
+                                if (roll < push_percent) {
+                                    stack.push(static_cast<int>(
+                                            iii ^ static_cast<std::size_t>(thread_index)
+                                    ));
+                                }
+                                else {
+                                    auto value = stack.pop();
+                                    if (value.has_value()) {
+                                        local_sum += static_cast<std::uint64_t>(*value);
+                                    }
+                                }
+                            }
+
+                            pop_sum.fetch_add(local_sum, std::memory_order_relaxed);
+                        });
+                    }
+
+                    sync_start.arrive_and_wait();
+
+                    for (auto& worker : workers) {
+                        worker.join();
+                    }
+
+                    g_sink += pop_sum.load(std::memory_order_relaxed);
+                }
+        );
+    }
+
     std::vector<BenchmarkAggregate> build_aggregates(const std::vector<BenchmarkSample>& samples) {
         std::vector<BenchmarkAggregate> aggregates;
         std::map<std::pair<std::string, std::string>, std::vector<const BenchmarkSample*>> grouped;
@@ -460,6 +539,186 @@ namespace {
         out << "</svg>\n";
     }
 
+    struct ContentionSeriesPoint {
+        int thread_count;
+        double avg_ops_per_second;
+    };
+
+    bool parse_contention_op(
+            std::string_view operation,
+            int& thread_count,
+            int& push_percent,
+            int& pop_percent
+    ) {
+        const std::string prefix = "contention_t";
+        if (!operation.starts_with(prefix)) {
+            return false;
+        }
+
+        const std::size_t push_pos = operation.find("_push");
+        const std::size_t pop_pos = operation.find("_pop");
+        if (push_pos == std::string::npos || pop_pos == std::string::npos || pop_pos <= push_pos) {
+            return false;
+        }
+
+        try {
+            thread_count =
+                    std::stoi(std::string(operation.substr(prefix.size(), push_pos - prefix.size()))
+                    );
+            push_percent =
+                    std::stoi(std::string(operation.substr(push_pos + 5, pop_pos - (push_pos + 5)))
+                    );
+            pop_percent = std::stoi(std::string(operation.substr(pop_pos + 4)));
+        }
+        catch (...) {
+            return false;
+        }
+        return true;
+    }
+
+    std::string color_for_series(int push_percent) {
+        if (push_percent == 80) {
+            return "#1d3557";
+        }
+        if (push_percent == 50) {
+            return "#2a9d8f";
+        }
+        return "#e76f51";
+    }
+
+    void write_contention_svg(
+            const std::vector<BenchmarkAggregate>& aggregates,
+            const std::filesystem::path& output_path
+    ) {
+        std::map<std::string, std::vector<ContentionSeriesPoint>> series;
+        std::vector<int> thread_counts;
+        double max_ops = 0.0;
+
+        for (const auto& aggregate : aggregates) {
+            int thread_count = 0;
+            int push_percent = 0;
+            int pop_percent = 0;
+            if (!parse_contention_op(
+                        aggregate.operation,
+                        thread_count,
+                        push_percent,
+                        pop_percent
+                )) {
+                continue;
+            }
+
+            const std::string key = aggregate.implementation + " " + std::to_string(push_percent) +
+                                    "/" + std::to_string(pop_percent);
+            series[key].push_back(ContentionSeriesPoint{
+                    .thread_count = thread_count,
+                    .avg_ops_per_second = aggregate.avg_ops_per_second,
+            });
+            if (std::find(thread_counts.begin(), thread_counts.end(), thread_count) ==
+                thread_counts.end()) {
+                thread_counts.push_back(thread_count);
+            }
+            max_ops = std::max(max_ops, aggregate.avg_ops_per_second);
+        }
+
+        std::sort(thread_counts.begin(), thread_counts.end());
+        for (auto& [_, points] : series) {
+            std::sort(points.begin(), points.end(), [](const auto& lhs, const auto& rhs) {
+                return lhs.thread_count < rhs.thread_count;
+            });
+        }
+
+        const int width = 1280;
+        const int height = 720;
+        const int margin_left = 90;
+        const int margin_right = 240;
+        const int margin_top = 80;
+        const int margin_bottom = 90;
+        const double plot_w = static_cast<double>(width - margin_left - margin_right);
+        const double plot_h = static_cast<double>(height - margin_top - margin_bottom);
+
+        std::ofstream out(output_path);
+        out << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" << width << "\" height=\""
+            << height << "\" viewBox=\"0 0 " << width << " " << height << "\">\n";
+        out << "<rect x=\"0\" y=\"0\" width=\"" << width << "\" height=\"" << height
+            << "\" fill=\"#ffffff\"/>\n";
+        out << "<text x=\"" << width / 2
+            << "\" y=\"40\" text-anchor=\"middle\" font-size=\"26\" font-family=\"Menlo, "
+               "monospace\" "
+               "fill=\"#111111\">Multithreaded Contention Throughput (average ops/sec)</text>\n";
+
+        for (int tick = 0; tick <= 5; ++tick) {
+            const double ratio = static_cast<double>(tick) / 5.0;
+            const double y = margin_top + plot_h - ratio * plot_h;
+            const double value = ratio * max_ops;
+            out << "<line x1=\"" << margin_left << "\" y1=\"" << y << "\" x2=\""
+                << (width - margin_right) << "\" y2=\"" << y
+                << "\" stroke=\"#e0e0e0\" stroke-width=\"1\"/>\n";
+            out << "<text x=\"" << (margin_left - 10) << "\" y=\"" << (y + 4)
+                << "\" text-anchor=\"end\" font-size=\"12\" font-family=\"Menlo, monospace\" "
+                   "fill=\"#444444\">"
+                << format_metric(value) << "</text>\n";
+        }
+
+        out << "<line x1=\"" << margin_left << "\" y1=\"" << margin_top << "\" x2=\"" << margin_left
+            << "\" y2=\"" << (height - margin_bottom)
+            << "\" stroke=\"#222222\" stroke-width=\"2\"/>\n";
+        out << "<line x1=\"" << margin_left << "\" y1=\"" << (height - margin_bottom) << "\" x2=\""
+            << (width - margin_right) << "\" y2=\"" << (height - margin_bottom)
+            << "\" stroke=\"#222222\" stroke-width=\"2\"/>\n";
+
+        auto x_for_threads = [&](int threads) {
+            const auto it = std::find(thread_counts.begin(), thread_counts.end(), threads);
+            const std::size_t idx =
+                    static_cast<std::size_t>(std::distance(thread_counts.begin(), it));
+            const double frac = thread_counts.size() == 1
+                                        ? 0.0
+                                        : static_cast<double>(idx) /
+                                                  static_cast<double>(thread_counts.size() - 1);
+            return margin_left + frac * plot_w;
+        };
+
+        for (const int threads : thread_counts) {
+            const double x = x_for_threads(threads);
+            out << "<text x=\"" << x << "\" y=\"" << (height - margin_bottom + 20)
+                << "\" text-anchor=\"middle\" font-size=\"12\" font-family=\"Menlo, monospace\" "
+                   "fill=\"#222222\">"
+                << threads << "t</text>\n";
+        }
+
+        int legend_y = 90;
+        for (const auto& [key, points] : series) {
+            int push_percent = 50;
+            if (key.find("80/20") != std::string::npos) {
+                push_percent = 80;
+            }
+            else if (key.find("20/80") != std::string::npos) {
+                push_percent = 20;
+            }
+            const std::string color = color_for_series(push_percent);
+
+            std::string polyline_points;
+            for (const auto& point : points) {
+                const double x = x_for_threads(point.thread_count);
+                const double ratio = (max_ops > 0.0) ? (point.avg_ops_per_second / max_ops) : 0.0;
+                const double y = margin_top + plot_h - ratio * plot_h;
+                polyline_points += std::to_string(x) + "," + std::to_string(y) + " ";
+                out << "<circle cx=\"" << x << "\" cy=\"" << y << "\" r=\"3.5\" fill=\"" << color
+                    << "\"/>\n";
+            }
+            out << "<polyline points=\"" << polyline_points << "\" fill=\"none\" stroke=\"" << color
+                << "\" stroke-width=\"2.5\"/>\n";
+
+            out << "<rect x=\"" << (width - margin_right + 20) << "\" y=\"" << (legend_y - 10)
+                << "\" width=\"14\" height=\"14\" fill=\"" << color << "\"/>\n";
+            out << "<text x=\"" << (width - margin_right + 40) << "\" y=\"" << legend_y
+                << "\" font-size=\"12\" font-family=\"Menlo, monospace\" fill=\"#222222\">" << key
+                << "</text>\n";
+            legend_y += 24;
+        }
+
+        out << "</svg>\n";
+    }
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -487,6 +746,7 @@ int main(int argc, char** argv) {
 
     const std::size_t iterations = quick ? 20'000 : 300'000;
     const int repeats = quick ? 2 : 5;
+    const std::size_t contention_ops_per_thread = quick ? 10'000 : 100'000;
 
     std::vector<BenchmarkSample> samples;
     samples.reserve(256);
@@ -531,6 +791,27 @@ int main(int argc, char** argv) {
     append_samples(bench_top<STL>("STLStack", iterations, repeats));
     append_samples(bench_reserve_spinlock(iterations, repeats));
 
+    const std::vector<int> contention_threads = {2, 4, 8, 16};
+    const std::vector<int> push_percents = {50, 80, 20};
+    for (const int thread_count : contention_threads) {
+        for (const int push_percent : push_percents) {
+            append_samples(bench_contention_mix<Spinlock>(
+                    "SpinlockStack",
+                    thread_count,
+                    push_percent,
+                    contention_ops_per_thread,
+                    repeats
+            ));
+            append_samples(bench_contention_mix<CAS>(
+                    "CASStack",
+                    thread_count,
+                    push_percent,
+                    contention_ops_per_thread,
+                    repeats
+            ));
+        }
+    }
+
     const auto aggregates = build_aggregates(samples);
 
     const auto repo_root = find_repo_root();
@@ -540,15 +821,18 @@ int main(int argc, char** argv) {
     const auto csv_path = output_dir / "stack_benchmark_results.csv";
     const auto ns_svg_path = output_dir / "stack_ns_per_op.svg";
     const auto ops_svg_path = output_dir / "stack_ops_per_sec.svg";
+    const auto contention_svg_path = output_dir / "stack_contention_ops_per_sec.svg";
 
     write_results_csv(samples, aggregates, repeats, csv_path);
     write_svg_grouped_bars(aggregates, ns_svg_path, true);
     write_svg_grouped_bars(aggregates, ops_svg_path, false);
+    write_contention_svg(aggregates, contention_svg_path);
 
     std::cout << "Stack performance benchmark complete.\n";
     std::cout << "Results CSV: " << csv_path << "\n";
     std::cout << "Graph (ns/op, averaged): " << ns_svg_path << "\n";
     std::cout << "Graph (ops/sec, averaged): " << ops_svg_path << "\n";
+    std::cout << "Graph (contention ops/sec, averaged): " << contention_svg_path << "\n";
     std::cout << "Sink: " << g_sink << "\n";
 
     return 0;
