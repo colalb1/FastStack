@@ -43,7 +43,7 @@ namespace seraph {
         }
 
         std::optional<T> pop() {
-            T value;
+            std::optional<T> result;
 
             {
                 SpinlockGuard guard(lock_);
@@ -70,15 +70,13 @@ namespace seraph {
             return data_.back();
         }
 
-        // Do not use for concurrency logic.
         bool empty() const noexcept {
             SpinlockGuard guard(lock_);
 
             return data_.empty();
         }
 
-        // Note: Result is stale immediately after return.
-        std::size_t size() const noexcept {
+        size_t size() const noexcept {
             SpinlockGuard guard(lock_);
 
             return data_.size();
