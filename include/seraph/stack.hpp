@@ -78,12 +78,6 @@ namespace seraph {
 
             return data_.empty();
         }
-
-        size_t size() const noexcept {
-            SpinlockGuard guard(lock_);
-
-            return data_.size();
-        }
     };
 
     // This is a Treiber stack: https://en.wikipedia.org/wiki/Treiber_stack
@@ -118,10 +112,6 @@ namespace seraph {
 
         bool empty() const noexcept {
             return storage_.empty();
-        }
-
-        size_t size() const noexcept {
-            return storage_.size();
         }
     };
 
