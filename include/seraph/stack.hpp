@@ -117,10 +117,21 @@ namespace seraph {
             std::atomic<Node*> pointer;
         };
 
+        struct HazardReleaser {
+            ~HazardReleaser() {
+                if (local_hazard_) {
+                    local_hazard_->pointer.store(nullptr, std::memory_order_release);
+                    local_hazard_->owner.store(std::thread::id{}, std::memory_order_release);
+                    local_hazard_ = nullptr;
+                }
+            }
+        };
+
         static constexpr size_t k_max_hazard_pointers{128};
         static HazardRecord hazard_records_[k_max_hazard_pointers];
 
         static thread_local HazardRecord* local_hazard_;
+        static thread_local HazardReleaser hazard_releaser_;
 
         static HazardRecord* acquire_hazard() {
             if (local_hazard_) {
@@ -134,7 +145,7 @@ namespace seraph {
                             std::this_thread::get_id(),
                             std::memory_order_acq_rel
                     )) {
-
+                    (void)hazard_releaser_;
                     local_hazard_ = &hazard_records_[iii];
                     return local_hazard_;
                 }
@@ -274,6 +285,9 @@ namespace seraph {
 
     template <typename T>
     thread_local typename CASStack<T>::HazardRecord* CASStack<T>::local_hazard_ = nullptr;
+
+    template <typename T>
+    thread_local typename CASStack<T>::HazardReleaser CASStack<T>::hazard_releaser_{};
 
     template <typename T>
     thread_local std::vector<typename CASStack<T>::Node*> CASStack<T>::retire_list_;
