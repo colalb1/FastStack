@@ -17,8 +17,8 @@ namespace seraph {
     template <typename T> class Stack {
       private:
         // Starts in a spinlock-protected vector mode and promotes once to lock-free CAS.
-        static constexpr size_t k_default_thread_threshold = 4;
-        static constexpr size_t k_default_streak_threshold = 256;
+        static constexpr size_t k_default_thread_threshold{4};
+        static constexpr size_t k_default_streak_threshold{256};
 
         struct Node {
             T value;
@@ -70,8 +70,9 @@ namespace seraph {
                 return local_hazard_;
             }
 
-            for (size_t iii = 0; iii < k_max_hazard_pointers; ++iii) {
+            for (size_t iii{0}; iii < k_max_hazard_pointers; ++iii) {
                 std::thread::id empty;
+
                 if (hazard_records_[iii].owner.compare_exchange_strong(
                             empty,
                             std::this_thread::get_id(),
@@ -79,6 +80,7 @@ namespace seraph {
                     )) {
                     (void)hazard_releaser_;
                     local_hazard_ = &hazard_records_[iii];
+
                     return local_hazard_;
                 }
             }
@@ -87,7 +89,7 @@ namespace seraph {
         }
 
         static bool is_hazard(Node* node) {
-            for (size_t iii = 0; iii < k_max_hazard_pointers; ++iii) {
+            for (size_t iii{0}; iii < k_max_hazard_pointers; ++iii) {
                 if (hazard_records_[iii].pointer.load(std::memory_order_acquire) == node) {
                     return true;
                 }
@@ -97,6 +99,7 @@ namespace seraph {
 
         static void scan() {
             auto iterator = retire_list_.begin();
+
             while (iterator != retire_list_.end()) {
                 if (!is_hazard(*iterator)) {
                     delete *iterator;
@@ -110,6 +113,7 @@ namespace seraph {
 
         static void retire(Node* node) {
             retire_list_.push_back(node);
+
             if (retire_list_.size() >= 2 * k_max_hazard_pointers) {
                 scan();
             }
@@ -132,8 +136,8 @@ namespace seraph {
         }
 
         std::optional<T> cas_pop_impl() {
-            HazardRecord* hazard = acquire_hazard();
-            Node* old_head = cas_head_.load(std::memory_order_acquire);
+            HazardRecord* hazard(acquire_hazard());
+            Node* old_head(cas_head_.load(std::memory_order_acquire));
 
             while (old_head) {
                 hazard->pointer.store(old_head, std::memory_order_release);
@@ -144,6 +148,7 @@ namespace seraph {
                 }
 
                 Node* next = old_head->next;
+
                 if (cas_head_.compare_exchange_weak(
                             old_head,
                             next,
@@ -164,8 +169,8 @@ namespace seraph {
         }
 
         std::optional<T> cas_top_impl() const {
-            HazardRecord* hazard = acquire_hazard();
-            Node* old_head = cas_head_.load(std::memory_order_acquire);
+            HazardRecord* hazard(acquire_hazard());
+            Node* old_head(cas_head_.load(std::memory_order_acquire));
 
             while (old_head) {
                 hazard->pointer.store(old_head, std::memory_order_release);
@@ -194,11 +199,13 @@ namespace seraph {
 
         void clear_cas_nodes() {
             Node* node(cas_head_.load(std::memory_order_relaxed));
+
             while (node) {
                 Node* next = node->next;
                 delete node;
                 node = next;
             }
+
             cas_head_.store(nullptr, std::memory_order_relaxed);
             cas_size_.store(0, std::memory_order_relaxed);
         }
@@ -209,8 +216,8 @@ namespace seraph {
             }
 
             if (active_now >= contention_thread_threshold_) {
-                const size_t streak =
-                        contention_streak_.fetch_add(1, std::memory_order_acq_rel) + 1;
+                const size_t streak(contention_streak_.fetch_add(1, std::memory_order_acq_rel) + 1);
+
                 if (streak >= promotion_streak_threshold_) {
                     promotion_requested_.store(true, std::memory_order_release);
                 }
@@ -227,6 +234,7 @@ namespace seraph {
             }
 
             std::unique_lock mode_guard(mode_mutex_);
+
             if (using_cas_.load(std::memory_order_relaxed)) {
                 return;
             }
@@ -305,6 +313,7 @@ namespace seraph {
             maybe_promote_to_cas();
 
             std::shared_lock mode_guard(mode_mutex_);
+
             if (using_cas_.load(std::memory_order_acquire)) {
                 cas_emplace_impl(value);
             }
@@ -320,6 +329,7 @@ namespace seraph {
             maybe_promote_to_cas();
 
             std::shared_lock mode_guard(mode_mutex_);
+
             if (using_cas_.load(std::memory_order_acquire)) {
                 cas_emplace_impl(std::move(value));
             }
@@ -334,6 +344,7 @@ namespace seraph {
             maybe_promote_to_cas();
 
             std::shared_lock mode_guard(mode_mutex_);
+
             if (using_cas_.load(std::memory_order_acquire)) {
                 cas_emplace_impl(std::forward<Args>(args)...);
             }
@@ -349,11 +360,13 @@ namespace seraph {
             maybe_promote_to_cas();
 
             std::shared_lock mode_guard(mode_mutex_);
+
             if (using_cas_.load(std::memory_order_acquire)) {
                 return cas_pop_impl();
             }
 
             SpinlockGuard guard(spin_lock_);
+
             if (spin_data_.empty()) {
                 return std::nullopt;
             }
