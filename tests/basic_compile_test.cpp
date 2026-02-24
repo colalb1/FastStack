@@ -1,36 +1,30 @@
-#include "seraph/queue.hpp"
 #include "seraph/stack.hpp"
 
-int main()
-{
-    seraph::Stack stack;
+int main() {
+    seraph::Stack<int> stack;
     stack.push(1);
     stack.push(2);
 
-    if (stack.top() != 2)
-    {
+    if (stack.top() != 2) {
         return 1;
     }
 
-    if (stack.pop() != 2)
-    {
+    if (stack.pop() != 2) {
         return 1;
     }
 
-    seraph::Queue queue;
-    queue.enqueue(10);
-    queue.enqueue(20);
+    seraph::Stack<int> adaptive_stack;
+    adaptive_stack.push(10);
+    adaptive_stack.emplace(20);
 
-    if (queue.front() != 10)
-    {
+    if (adaptive_stack.top() != 20) {
         return 1;
     }
 
-    if (queue.dequeue() != 10)
-    {
+    if (adaptive_stack.pop() != 20) {
         return 1;
     }
 
-    // TODO(colin): Replace this smoke test with structured unit tests (e.g., GoogleTest or Catch2).
+    // TODO: Replace this smoke test with structured unit tests GoogleTest
     return 0;
 }

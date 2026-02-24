@@ -4,33 +4,27 @@
 #include <stdexcept>
 #include <vector>
 
-namespace seraph
-{
+namespace seraph {
 
-    class Queue
-    {
+    template <typename T> class Queue {
       public:
-        using value_type = int;
+        using T = int;
 
         Queue() = default;
 
-        void enqueue(value_type value)
-        {
+        void enqueue(T value) {
             storage_.push_back(value);
         }
 
-        value_type dequeue()
-        {
-            if (empty())
-            {
+        T dequeue() {
+            if (empty()) {
                 throw std::out_of_range("Cannot dequeue from an empty queue");
             }
 
-            value_type value = storage_[head_];
+            T value = storage_[head_];
             ++head_;
 
-            if (head_ > kCompactionThreshold && head_ * 2 > storage_.size())
-            {
+            if (head_ > kCompactionThreshold && head_ * 2 > storage_.size()) {
                 storage_.erase(
                         storage_.begin(),
                         storage_.begin() + static_cast<std::ptrdiff_t>(head_)
@@ -41,23 +35,19 @@ namespace seraph
             return value;
         }
 
-        [[nodiscard]] value_type front() const
-        {
-            if (empty())
-            {
+        [[nodiscard]] T front() const {
+            if (empty()) {
                 throw std::out_of_range("Cannot read front of an empty queue");
             }
 
             return storage_[head_];
         }
 
-        [[nodiscard]] bool empty() const noexcept
-        {
+        [[nodiscard]] bool empty() const noexcept {
             return head_ >= storage_.size();
         }
 
-        [[nodiscard]] std::size_t size() const noexcept
-        {
+        [[nodiscard]] std::size_t size() const noexcept {
             return storage_.size() - head_;
         }
 
@@ -67,7 +57,7 @@ namespace seraph
 
       private:
         static constexpr std::size_t kCompactionThreshold = 64;
-        std::vector<value_type> storage_;
+        std::vector<T> storage_;
         std::size_t head_ = 0;
     };
 
