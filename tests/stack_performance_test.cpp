@@ -299,9 +299,9 @@ namespace {
         });
     }
 
-    std::vector<BenchmarkSample> bench_reserve_spinlock(std::size_t iterations, int repeats) {
-        return run_samples("SpinlockStack", "reserve", iterations, repeats, [iterations]() {
-            seraph::SpinlockStack<int> stack;
+    std::vector<BenchmarkSample> bench_reserve_stack(std::size_t iterations, int repeats) {
+        return run_samples("Stack", "reserve", iterations, repeats, [iterations]() {
+            seraph::Stack<int> stack;
             for (std::size_t iii = 1; iii <= iterations; ++iii) {
                 stack.reserve(iii);
             }
@@ -452,7 +452,7 @@ namespace {
     }
 
     std::string color_for_impl(std::string_view impl) {
-        if (impl == "SpinlockStack") {
+        if (impl == "Stack") {
             return "#2a9d8f";
         }
         if (impl == "STLStack") {
@@ -480,7 +480,7 @@ namespace {
             }
         }
 
-        const std::vector<std::string> impls = {"SpinlockStack", "CASStack", "STLStack"};
+        const std::vector<std::string> impls = {"Stack", "STLStack"};
 
         std::map<std::string, std::map<std::string, double>> metric_by_op_impl;
         double max_metric = 0.0;
@@ -817,52 +817,38 @@ int main(int argc, char** argv) {
         );
     };
 
-    using Spinlock = seraph::SpinlockStack<int>;
-    using CAS = seraph::CASStack<int>;
+    using SeraphStack = seraph::Stack<int>;
     using STL = STLStackAdapter;
     using STLContention = ThreadSafeSTLStackAdapter;
 
-    append_samples(bench_push_copy<Spinlock>("SpinlockStack", iterations, repeats));
-    append_samples(bench_push_copy<CAS>("CASStack", iterations, repeats));
+    append_samples(bench_push_copy<SeraphStack>("Stack", iterations, repeats));
     append_samples(bench_push_copy<STL>("STLStack", iterations, repeats));
 
-    append_samples(bench_push_move<Spinlock>("SpinlockStack", iterations, repeats));
-    append_samples(bench_push_move<CAS>("CASStack", iterations, repeats));
+    append_samples(bench_push_move<SeraphStack>("Stack", iterations, repeats));
     append_samples(bench_push_move<STL>("STLStack", iterations, repeats));
 
-    append_samples(bench_emplace<Spinlock>("SpinlockStack", iterations, repeats));
-    append_samples(bench_emplace<CAS>("CASStack", iterations, repeats));
+    append_samples(bench_emplace<SeraphStack>("Stack", iterations, repeats));
     append_samples(bench_emplace<STL>("STLStack", iterations, repeats));
 
-    append_samples(bench_pop<Spinlock>("SpinlockStack", iterations, repeats));
-    append_samples(bench_pop<CAS>("CASStack", iterations, repeats));
+    append_samples(bench_pop<SeraphStack>("Stack", iterations, repeats));
     append_samples(bench_pop<STL>("STLStack", iterations, repeats));
 
-    append_samples(bench_size<Spinlock>("SpinlockStack", iterations, repeats));
-    append_samples(bench_size<CAS>("CASStack", iterations, repeats));
+    append_samples(bench_size<SeraphStack>("Stack", iterations, repeats));
     append_samples(bench_size<STL>("STLStack", iterations, repeats));
 
-    append_samples(bench_empty<Spinlock>("SpinlockStack", iterations, repeats));
-    append_samples(bench_empty<CAS>("CASStack", iterations, repeats));
+    append_samples(bench_empty<SeraphStack>("Stack", iterations, repeats));
     append_samples(bench_empty<STL>("STLStack", iterations, repeats));
 
-    append_samples(bench_top<Spinlock>("SpinlockStack", iterations, repeats));
+    append_samples(bench_top<SeraphStack>("Stack", iterations, repeats));
     append_samples(bench_top<STL>("STLStack", iterations, repeats));
-    append_samples(bench_reserve_spinlock(iterations, repeats));
+    append_samples(bench_reserve_stack(iterations, repeats));
 
     const std::vector<int> contention_threads = {2, 4, 8, 16};
     const std::vector<int> push_percents = {50, 80, 20};
     for (const int thread_count : contention_threads) {
         for (const int push_percent : push_percents) {
-            append_samples(bench_contention_mix<Spinlock>(
-                    "SpinlockStack",
-                    thread_count,
-                    push_percent,
-                    contention_ops_per_thread,
-                    repeats
-            ));
-            append_samples(bench_contention_mix<CAS>(
-                    "CASStack",
+            append_samples(bench_contention_mix<SeraphStack>(
+                    "Stack",
                     thread_count,
                     push_percent,
                     contention_ops_per_thread,
