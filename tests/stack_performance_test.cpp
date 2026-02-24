@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <stack>
@@ -85,6 +86,56 @@ namespace {
         }
 
       private:
+        std::stack<int, std::vector<int>> data_;
+    };
+
+    class ThreadSafeSTLStackAdapter {
+      public:
+        void push(const int& value) {
+            std::lock_guard<std::mutex> guard(lock_);
+            data_.push(value);
+        }
+
+        void push(int&& value) {
+            std::lock_guard<std::mutex> guard(lock_);
+            data_.push(std::move(value));
+        }
+
+        template <typename... Args> void emplace(Args&&... args) {
+            std::lock_guard<std::mutex> guard(lock_);
+            data_.emplace(std::forward<Args>(args)...);
+        }
+
+        std::optional<int> pop() {
+            std::lock_guard<std::mutex> guard(lock_);
+            if (data_.empty()) {
+                return std::nullopt;
+            }
+            int value = std::move(data_.top());
+            data_.pop();
+            return value;
+        }
+
+        std::optional<int> top() const {
+            std::lock_guard<std::mutex> guard(lock_);
+            if (data_.empty()) {
+                return std::nullopt;
+            }
+            return data_.top();
+        }
+
+        bool empty() const noexcept {
+            std::lock_guard<std::mutex> guard(lock_);
+            return data_.empty();
+        }
+
+        std::size_t size() const noexcept {
+            std::lock_guard<std::mutex> guard(lock_);
+            return data_.size();
+        }
+
+      private:
+        mutable std::mutex lock_;
         std::stack<int, std::vector<int>> data_;
     };
 
@@ -769,6 +820,7 @@ int main(int argc, char** argv) {
     using Spinlock = seraph::SpinlockStack<int>;
     using CAS = seraph::CASStack<int>;
     using STL = STLStackAdapter;
+    using STLContention = ThreadSafeSTLStackAdapter;
 
     append_samples(bench_push_copy<Spinlock>("SpinlockStack", iterations, repeats));
     append_samples(bench_push_copy<CAS>("CASStack", iterations, repeats));
@@ -811,6 +863,13 @@ int main(int argc, char** argv) {
             ));
             append_samples(bench_contention_mix<CAS>(
                     "CASStack",
+                    thread_count,
+                    push_percent,
+                    contention_ops_per_thread,
+                    repeats
+            ));
+            append_samples(bench_contention_mix<STLContention>(
+                    "STLStack",
                     thread_count,
                     push_percent,
                     contention_ops_per_thread,
