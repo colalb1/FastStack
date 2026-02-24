@@ -66,8 +66,9 @@ namespace seraph {
         class ActiveOperationScope {
           public:
             explicit ActiveOperationScope(Stack& stack) : stack_(stack) {
-                const size_t active_now =
-                        stack_.active_ops_.fetch_add(1, std::memory_order_relaxed) + 1;
+                const size_t active_now(
+                        stack_.active_ops_.fetch_add(1, std::memory_order_relaxed) + 1
+                );
                 stack_.observe_contention(active_now);
             }
 
