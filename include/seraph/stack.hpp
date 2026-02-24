@@ -3,10 +3,12 @@
 #include "locks.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <exception>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <shared_mutex>
 #include <thread>
@@ -17,8 +19,17 @@ namespace seraph {
     template <typename T> class Stack {
       private:
         // Starts in a spinlock-protected vector mode and promotes once to lock-free CAS.
-        static constexpr size_t k_default_thread_threshold{4};
-        static constexpr size_t k_default_streak_threshold{256};
+
+        // Fast promotion under practical workload contention.
+        static constexpr size_t k_default_thread_threshold{3};
+        static constexpr size_t k_default_streak_threshold{64};
+#if defined(__cpp_lib_hardware_interference_size)
+        static constexpr size_t k_destructive_interference_size{
+                std::hardware_destructive_interference_size
+        };
+#else
+        static constexpr size_t k_destructive_interference_size{64};
+#endif
 
         struct Node {
             T value;
@@ -28,7 +39,7 @@ namespace seraph {
             Node(Node* n, Args&&... args) : value(std::forward<Args>(args)...), next(n) {}
         };
 
-        struct HazardRecord {
+        struct alignas(k_destructive_interference_size) HazardRecord {
             std::atomic<std::thread::id> owner;
             std::atomic<Node*> pointer;
         };
@@ -43,7 +54,10 @@ namespace seraph {
             }
         };
 
-        static constexpr size_t k_max_hazard_pointers{128};
+        // 16 used as this will run on 4-threads. Reduces hazard-table scan traffic.
+        // 4 threads allows one hazard slot per active thread.
+        static constexpr size_t k_max_hazard_pointers{16};
+        static constexpr size_t k_retire_scan_threshold{64};
         static HazardRecord hazard_records_[k_max_hazard_pointers];
         static thread_local HazardRecord* local_hazard_;
         static thread_local HazardReleaser hazard_releaser_;
@@ -53,12 +67,12 @@ namespace seraph {
           public:
             explicit ActiveOperationScope(Stack& stack) : stack_(stack) {
                 const size_t active_now =
-                        stack_.active_ops_.fetch_add(1, std::memory_order_acq_rel) + 1;
+                        stack_.active_ops_.fetch_add(1, std::memory_order_relaxed) + 1;
                 stack_.observe_contention(active_now);
             }
 
             ~ActiveOperationScope() {
-                stack_.active_ops_.fetch_sub(1, std::memory_order_acq_rel);
+                stack_.active_ops_.fetch_sub(1, std::memory_order_relaxed);
             }
 
           private:
@@ -88,33 +102,41 @@ namespace seraph {
             std::terminate();
         }
 
-        static bool is_hazard(Node* node) {
-            for (size_t iii{0}; iii < k_max_hazard_pointers; ++iii) {
-                if (hazard_records_[iii].pointer.load(std::memory_order_acquire) == node) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
         static void scan() {
-            auto iterator = retire_list_.begin();
+            std::array<Node*, k_max_hazard_pointers> hazard_snapshot{};
 
-            while (iterator != retire_list_.end()) {
-                if (!is_hazard(*iterator)) {
-                    delete *iterator;
-                    iterator = retire_list_.erase(iterator);
+            for (size_t iii{0}; iii < k_max_hazard_pointers; ++iii) {
+                hazard_snapshot[iii] = hazard_records_[iii].pointer.load(std::memory_order_acquire);
+            }
+
+            size_t write_index{0};
+
+            for (size_t read_index{0}; read_index < retire_list_.size(); ++read_index) {
+                Node* retired_node(retire_list_[read_index]);
+                bool keep_node{false};
+
+                for (Node* hazard_node : hazard_snapshot) {
+                    if (hazard_node == retired_node) {
+                        keep_node = true;
+                        break;
+                    }
+                }
+
+                if (keep_node) {
+                    retire_list_[write_index++] = retired_node;
                 }
                 else {
-                    ++iterator;
+                    delete retired_node;
                 }
             }
+
+            retire_list_.resize(write_index);
         }
 
         static void retire(Node* node) {
             retire_list_.push_back(node);
 
-            if (retire_list_.size() >= 2 * k_max_hazard_pointers) {
+            if (retire_list_.size() >= k_retire_scan_threshold) {
                 scan();
             }
         }
@@ -211,25 +233,25 @@ namespace seraph {
         }
 
         void observe_contention(size_t active_now) {
-            if (using_cas_.load(std::memory_order_acquire)) {
+            if (using_cas_.load(std::memory_order_relaxed)) {
                 return;
             }
 
             if (active_now >= contention_thread_threshold_) {
-                const size_t streak(contention_streak_.fetch_add(1, std::memory_order_acq_rel) + 1);
+                const size_t streak(contention_streak_.fetch_add(1, std::memory_order_relaxed) + 1);
 
                 if (streak >= promotion_streak_threshold_) {
-                    promotion_requested_.store(true, std::memory_order_release);
+                    promotion_requested_.store(true, std::memory_order_relaxed);
                 }
             }
             else {
-                contention_streak_.store(0, std::memory_order_release);
+                contention_streak_.store(0, std::memory_order_relaxed);
             }
         }
 
         void maybe_promote_to_cas() {
             if (using_cas_.load(std::memory_order_acquire) ||
-                !promotion_requested_.load(std::memory_order_acquire)) {
+                !promotion_requested_.load(std::memory_order_relaxed)) {
                 return;
             }
 
