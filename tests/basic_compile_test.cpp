@@ -1,7 +1,7 @@
 #include "seraph/stack.hpp"
 
 int main() {
-    seraph::SpinlockStack<int> stack;
+    seraph::Stack<int> stack;
     stack.push(1);
     stack.push(2);
 
@@ -10,6 +10,18 @@ int main() {
     }
 
     if (stack.pop() != 2) {
+        return 1;
+    }
+
+    seraph::Stack<int> adaptive_stack;
+    adaptive_stack.push(10);
+    adaptive_stack.emplace(20);
+
+    if (adaptive_stack.top() != 20) {
+        return 1;
+    }
+
+    if (adaptive_stack.pop() != 20) {
         return 1;
     }
 
