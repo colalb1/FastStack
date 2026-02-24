@@ -443,7 +443,7 @@ namespace {
                 op_label,
                 total_ops,
                 repeats,
-                [thread_count, ops_per_thread]() {
+                [thread_count, ops_per_thread, total_ops]() {
                     Stack stack;
                     for (std::size_t iii = 0; iii < total_ops; ++iii) {
                         stack.emplace(static_cast<int>(iii));
@@ -869,6 +869,155 @@ namespace {
         out << "</svg>\n";
     }
 
+    bool
+    parse_mt_simple_op(std::string_view operation, std::string_view prefix, int& thread_count) {
+        if (!operation.starts_with(prefix)) {
+            return false;
+        }
+
+        try {
+            thread_count = std::stoi(std::string(operation.substr(prefix.size())));
+        }
+        catch (...) {
+            return false;
+        }
+        return true;
+    }
+
+    void write_mt_specialized_svg(
+            const std::vector<BenchmarkAggregate>& aggregates,
+            const std::filesystem::path& output_path
+    ) {
+        std::map<std::string, std::vector<ContentionSeriesPoint>> series;
+        std::vector<int> thread_counts;
+        double max_ops = 0.0;
+
+        for (const auto& aggregate : aggregates) {
+            int thread_count = 0;
+            std::string key;
+            if (parse_mt_simple_op(aggregate.operation, "mt_push_only_t", thread_count)) {
+                key = aggregate.implementation + " push_only";
+            }
+            else if (parse_mt_simple_op(aggregate.operation, "mt_pop_only_t", thread_count)) {
+                key = aggregate.implementation + " pop_only";
+            }
+            else {
+                continue;
+            }
+
+            series[key].push_back(ContentionSeriesPoint{
+                    .thread_count = thread_count,
+                    .avg_ops_per_second = aggregate.avg_ops_per_second,
+            });
+
+            if (std::find(thread_counts.begin(), thread_counts.end(), thread_count) ==
+                thread_counts.end()) {
+                thread_counts.push_back(thread_count);
+            }
+            max_ops = std::max(max_ops, aggregate.avg_ops_per_second);
+        }
+
+        std::sort(thread_counts.begin(), thread_counts.end());
+        for (auto& [_, points] : series) {
+            std::sort(points.begin(), points.end(), [](const auto& lhs, const auto& rhs) {
+                return lhs.thread_count < rhs.thread_count;
+            });
+        }
+
+        const int width = 1280;
+        const int height = 720;
+        const int margin_left = 90;
+        const int margin_right = 260;
+        const int margin_top = 80;
+        const int margin_bottom = 90;
+        const double plot_w = static_cast<double>(width - margin_left - margin_right);
+        const double plot_h = static_cast<double>(height - margin_top - margin_bottom);
+
+        std::ofstream out(output_path);
+        out << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" << width << "\" height=\""
+            << height << "\" viewBox=\"0 0 " << width << " " << height << "\">\n";
+        out << "<rect x=\"0\" y=\"0\" width=\"" << width << "\" height=\"" << height
+            << "\" fill=\"#ffffff\"/>\n";
+        out << "<text x=\"" << width / 2
+            << "\" y=\"40\" text-anchor=\"middle\" font-size=\"26\" font-family=\"Menlo, "
+               "monospace\" "
+               "fill=\"#111111\">Multithreaded Specialized Throughput (average ops/sec)</text>\n";
+        out << "<text x=\"28\" y=\"" << (margin_top + plot_h / 2.0)
+            << "\" text-anchor=\"middle\" font-size=\"13\" font-family=\"Menlo, monospace\" "
+               "fill=\"#222222\" transform=\"rotate(-90 28 "
+            << (margin_top + plot_h / 2.0) << ")\">ops/sec</text>\n";
+        out << "<text x=\"" << (margin_left + plot_w / 2.0) << "\" y=\"" << (height - 12)
+            << "\" text-anchor=\"middle\" font-size=\"13\" font-family=\"Menlo, monospace\" "
+               "fill=\"#222222\">threads</text>\n";
+
+        for (int tick = 0; tick <= 5; ++tick) {
+            const double ratio = static_cast<double>(tick) / 5.0;
+            const double y = margin_top + plot_h - ratio * plot_h;
+            const double value = ratio * max_ops;
+            out << "<line x1=\"" << margin_left << "\" y1=\"" << y << "\" x2=\""
+                << (width - margin_right) << "\" y2=\"" << y
+                << "\" stroke=\"#e0e0e0\" stroke-width=\"1\"/>\n";
+            out << "<text x=\"" << (margin_left - 10) << "\" y=\"" << (y + 4)
+                << "\" text-anchor=\"end\" font-size=\"12\" font-family=\"Menlo, monospace\" "
+                   "fill=\"#444444\">"
+                << format_metric(value) << "</text>\n";
+        }
+
+        out << "<line x1=\"" << margin_left << "\" y1=\"" << margin_top << "\" x2=\"" << margin_left
+            << "\" y2=\"" << (height - margin_bottom)
+            << "\" stroke=\"#222222\" stroke-width=\"2\"/>\n";
+        out << "<line x1=\"" << margin_left << "\" y1=\"" << (height - margin_bottom) << "\" x2=\""
+            << (width - margin_right) << "\" y2=\"" << (height - margin_bottom)
+            << "\" stroke=\"#222222\" stroke-width=\"2\"/>\n";
+
+        auto x_for_threads = [&](int threads) {
+            const auto it = std::find(thread_counts.begin(), thread_counts.end(), threads);
+            const std::size_t idx =
+                    static_cast<std::size_t>(std::distance(thread_counts.begin(), it));
+            const double frac = thread_counts.size() == 1
+                                        ? 0.0
+                                        : static_cast<double>(idx) /
+                                                  static_cast<double>(thread_counts.size() - 1);
+            return margin_left + frac * plot_w;
+        };
+
+        for (const int threads : thread_counts) {
+            const double x = x_for_threads(threads);
+            out << "<text x=\"" << x << "\" y=\"" << (height - margin_bottom + 20)
+                << "\" text-anchor=\"middle\" font-size=\"12\" font-family=\"Menlo, monospace\" "
+                   "fill=\"#222222\">"
+                << threads << "t</text>\n";
+        }
+
+        int legend_y = 90;
+        std::size_t series_index = 0;
+        for (const auto& [key, points] : series) {
+            const std::string color = color_for_series_index(series_index);
+
+            std::string polyline_points;
+            for (const auto& point : points) {
+                const double x = x_for_threads(point.thread_count);
+                const double ratio = (max_ops > 0.0) ? (point.avg_ops_per_second / max_ops) : 0.0;
+                const double y = margin_top + plot_h - ratio * plot_h;
+                polyline_points += std::to_string(x) + "," + std::to_string(y) + " ";
+                out << "<circle cx=\"" << x << "\" cy=\"" << y << "\" r=\"3.5\" fill=\"" << color
+                    << "\"/>\n";
+            }
+            out << "<polyline points=\"" << polyline_points << "\" fill=\"none\" stroke=\"" << color
+                << "\" stroke-width=\"2.5\"/>\n";
+
+            out << "<rect x=\"" << (width - margin_right + 20) << "\" y=\"" << (legend_y - 10)
+                << "\" width=\"14\" height=\"14\" fill=\"" << color << "\"/>\n";
+            out << "<text x=\"" << (width - margin_right + 40) << "\" y=\"" << legend_y
+                << "\" font-size=\"12\" font-family=\"Menlo, monospace\" fill=\"#222222\">" << key
+                << "</text>\n";
+            legend_y += 24;
+            ++series_index;
+        }
+
+        out << "</svg>\n";
+    }
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -897,6 +1046,7 @@ int main(int argc, char** argv) {
     const std::size_t iterations = quick ? 20'000 : 300'000;
     const int repeats = quick ? 2 : 5;
     const std::size_t contention_ops_per_thread = quick ? 10'000 : 100'000;
+    const std::size_t specialized_ops_per_thread = quick ? 15'000 : 150'000;
 
     std::vector<BenchmarkSample> samples;
     samples.reserve(256);
@@ -956,6 +1106,34 @@ int main(int argc, char** argv) {
         }
     }
 
+    for (const int thread_count : contention_threads) {
+        append_samples(bench_mt_push_only<SeraphStack>(
+                "Stack",
+                thread_count,
+                specialized_ops_per_thread,
+                repeats
+        ));
+        append_samples(bench_mt_push_only<STLContention>(
+                "STLStack",
+                thread_count,
+                specialized_ops_per_thread,
+                repeats
+        ));
+
+        append_samples(bench_mt_pop_only<SeraphStack>(
+                "Stack",
+                thread_count,
+                specialized_ops_per_thread,
+                repeats
+        ));
+        append_samples(bench_mt_pop_only<STLContention>(
+                "STLStack",
+                thread_count,
+                specialized_ops_per_thread,
+                repeats
+        ));
+    }
+
     const auto aggregates = build_aggregates(samples);
 
     const auto repo_root = find_repo_root();
@@ -966,17 +1144,20 @@ int main(int argc, char** argv) {
     const auto ns_svg_path = output_dir / "stack_ns_per_op.svg";
     const auto ops_svg_path = output_dir / "stack_ops_per_sec.svg";
     const auto contention_svg_path = output_dir / "stack_contention_ops_per_sec.svg";
+    const auto specialized_mt_svg_path = output_dir / "stack_specialized_mt_ops_per_sec.svg";
 
     write_results_csv(samples, aggregates, repeats, csv_path);
     write_svg_grouped_bars(aggregates, ns_svg_path, true);
     write_svg_grouped_bars(aggregates, ops_svg_path, false);
     write_contention_svg(aggregates, contention_svg_path);
+    write_mt_specialized_svg(aggregates, specialized_mt_svg_path);
 
     std::cout << "Stack performance benchmark complete.\n";
     std::cout << "Results CSV: " << csv_path << "\n";
     std::cout << "Graph (ns/op, averaged): " << ns_svg_path << "\n";
     std::cout << "Graph (ops/sec, averaged): " << ops_svg_path << "\n";
     std::cout << "Graph (contention ops/sec, averaged): " << contention_svg_path << "\n";
+    std::cout << "Graph (specialized mt ops/sec, averaged): " << specialized_mt_svg_path << "\n";
     std::cout << "Sink: " << g_sink << "\n";
 
     return 0;
