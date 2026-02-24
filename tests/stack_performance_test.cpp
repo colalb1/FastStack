@@ -385,6 +385,98 @@ namespace {
         );
     }
 
+    std::string make_mt_simple_operation_label(std::string_view mode, int thread_count) {
+        return "mt_" + std::string(mode) + "_t" + std::to_string(thread_count);
+    }
+
+    template <typename Stack>
+    std::vector<BenchmarkSample> bench_mt_push_only(
+            std::string_view impl_name,
+            int thread_count,
+            std::size_t ops_per_thread,
+            int repeats
+    ) {
+        const std::size_t total_ops = static_cast<std::size_t>(thread_count) * ops_per_thread;
+        const std::string op_label = make_mt_simple_operation_label("push_only", thread_count);
+        return run_samples(
+                impl_name,
+                op_label,
+                total_ops,
+                repeats,
+                [thread_count, ops_per_thread]() {
+                    Stack stack;
+                    std::barrier sync_start(thread_count + 1);
+                    std::vector<std::thread> workers;
+                    workers.reserve(static_cast<std::size_t>(thread_count));
+
+                    for (int thread_index = 0; thread_index < thread_count; ++thread_index) {
+                        workers.emplace_back([&, thread_index]() {
+                            sync_start.arrive_and_wait();
+                            for (std::size_t iii = 0; iii < ops_per_thread; ++iii) {
+                                stack.push(static_cast<int>(
+                                        iii + static_cast<std::size_t>(thread_index)
+                                ));
+                            }
+                        });
+                    }
+
+                    sync_start.arrive_and_wait();
+                    for (auto& worker : workers) {
+                        worker.join();
+                    }
+                    g_sink += stack.size();
+                }
+        );
+    }
+
+    template <typename Stack>
+    std::vector<BenchmarkSample> bench_mt_pop_only(
+            std::string_view impl_name,
+            int thread_count,
+            std::size_t ops_per_thread,
+            int repeats
+    ) {
+        const std::size_t total_ops = static_cast<std::size_t>(thread_count) * ops_per_thread;
+        const std::string op_label = make_mt_simple_operation_label("pop_only", thread_count);
+        return run_samples(
+                impl_name,
+                op_label,
+                total_ops,
+                repeats,
+                [thread_count, ops_per_thread]() {
+                    Stack stack;
+                    for (std::size_t iii = 0; iii < total_ops; ++iii) {
+                        stack.emplace(static_cast<int>(iii));
+                    }
+
+                    std::barrier sync_start(thread_count + 1);
+                    std::atomic<std::uint64_t> pop_sum{0};
+                    std::vector<std::thread> workers;
+                    workers.reserve(static_cast<std::size_t>(thread_count));
+
+                    for (int thread_index = 0; thread_index < thread_count; ++thread_index) {
+                        workers.emplace_back([&, thread_index]() {
+                            std::uint64_t local_sum = 0;
+                            sync_start.arrive_and_wait();
+                            for (std::size_t iii = 0; iii < ops_per_thread; ++iii) {
+                                auto value = stack.pop();
+                                if (value.has_value()) {
+                                    local_sum += static_cast<std::uint64_t>(*value);
+                                }
+                            }
+                            pop_sum.fetch_add(local_sum, std::memory_order_relaxed);
+                        });
+                    }
+
+                    sync_start.arrive_and_wait();
+                    for (auto& worker : workers) {
+                        worker.join();
+                    }
+                    g_sink += pop_sum.load(std::memory_order_relaxed);
+                }
+        );
+    }
+
     std::vector<BenchmarkAggregate> build_aggregates(const std::vector<BenchmarkSample>& samples) {
         std::vector<BenchmarkAggregate> aggregates;
         std::map<std::pair<std::string, std::string>, std::vector<const BenchmarkSample*>> grouped;
