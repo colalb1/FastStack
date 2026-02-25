@@ -31,4 +31,4 @@ jobs:
       - name: Run clang-format check
         run: |
           python3 -m pip install --user --break-system-packages pre-commit
-          pre-commit run clang-format --all-files --show-diff-on-failure
+          python3 -m pre_commit run clang-format --all-files --show-diff-on-failure
