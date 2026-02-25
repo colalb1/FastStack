@@ -34,3 +34,13 @@ A nodal design is used as CAS stack algorithms require stable per-element addres
 [Hazard pointers](https://en.wikipedia.org/wiki/Hazard_pointer) are used in the compare-and-swap mode to allow for safe deffered node deletion, meaning the memory is freed only when no thread contains said node in a hazard slot.
 
 Hazard pointers were included in the implementation as `correctness` $\succ$ `speed`.
+
+
+### `Queue`
+
+Michael-Scott algorithm (linked list with an atomic head/tail). A ring buffer with a single producer and single consumer would technically be faster, but I would like this implementation to scale to four threads.
+
+Use a ring-buffer if you know the size.
+
+
+### `Ring Buffer`
