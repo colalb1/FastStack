@@ -1,3 +1,4 @@
+#include "seraph/queue.hpp"
 #include "seraph/stack.hpp"
 
 int main() {
@@ -22,6 +23,42 @@ int main() {
     }
 
     if (adaptive_stack.pop() != 20) {
+        return 1;
+    }
+
+    seraph::Queue<int> queue;
+    if (!queue.empty()) {
+        return 1;
+    }
+
+    queue.push(1);
+    queue.emplace(2);
+
+    if (queue.front() != 1) {
+        return 1;
+    }
+
+    if (queue.back() != 2) {
+        return 1;
+    }
+
+    if (queue.size() != 2) {
+        return 1;
+    }
+
+    if (queue.pop() != 1) {
+        return 1;
+    }
+
+    if (queue.pop() != 2) {
+        return 1;
+    }
+
+    if (!queue.empty()) {
+        return 1;
+    }
+
+    if (queue.pop().has_value()) {
         return 1;
     }
 
