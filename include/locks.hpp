@@ -1,11 +1,19 @@
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <new>
 
 #if defined(__aarch64__) || defined(__arm64__)
 #include <arm_acle.h>
 #endif
 
-class alignas(128) Spinlock {
+#if defined(__cpp_lib_hardware_interference_size)
+static constexpr size_t k_spinlock_alignment{std::hardware_destructive_interference_size};
+#else
+static constexpr size_t k_spinlock_alignment{64};
+#endif
+
+class alignas(k_spinlock_alignment) Spinlock {
   public:
     Spinlock() noexcept : state_(0) {}
 

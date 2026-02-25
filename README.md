@@ -2,6 +2,14 @@
 
 Seraph is a C++ data-structure library for Apple ARM64.
 
+The specs of the machine (Macbook M4 Pro) optimized for are as follows:
+
+- **L1 instruction cache size**: 128 KB
+- **L1 data cache size**: 64 KB
+- **L2 cache size**: 4 MB
+
+The structures are tuned for 4-thread workloads.
+
 ## Project Layout
 
 - `include/seraph/stack.hpp`: stack API skeleton
