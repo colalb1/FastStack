@@ -380,11 +380,11 @@ namespace seraph {
         }
 
         [[nodiscard]] auto empty() const noexcept -> bool {
-            return size_.load(std::memory_order_relaxed) == 0;
+            return size_.load(std::memory_order_acquire) == 0;
         }
 
         [[nodiscard]] auto size() const noexcept -> std::size_t {
-            return size_.load(std::memory_order_relaxed);
+            return size_.load(std::memory_order_acquire);
         }
     };
 
