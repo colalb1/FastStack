@@ -597,6 +597,12 @@ namespace {
         return ss.str();
     }
 
+    auto format_ratio(double value) -> std::string {
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(2) << value;
+        return ss.str();
+    }
+
     void write_svg_grouped_bars(
             const std::vector<BenchmarkAggregate>& aggregates,
             const std::filesystem::path& output_path,
@@ -1057,6 +1063,31 @@ namespace {
         out << "</svg>\n";
     }
 
+    void print_mt_comparison_summary(const std::vector<BenchmarkAggregate>& aggregates) {
+        std::map<std::string, std::map<std::string, double>> mt_ops;
+        for (const auto& aggregate : aggregates) {
+            if (!aggregate.operation.starts_with("contention_") &&
+                !aggregate.operation.starts_with("mt_")) {
+                continue;
+            }
+            mt_ops[aggregate.operation][aggregate.implementation] = aggregate.avg_ops_per_second;
+        }
+
+        std::cout << "Multithread throughput ratio (Queue / STLQueue):\n";
+        for (const auto& [operation, by_impl] : mt_ops) {
+            const auto queue_it = by_impl.find("Queue");
+            const auto stl_it = by_impl.find("STLQueue");
+            if (queue_it == by_impl.end() || stl_it == by_impl.end() || stl_it->second <= 0.0) {
+                continue;
+            }
+
+            const double ratio = queue_it->second / stl_it->second;
+            std::cout << "  " << operation << ": " << format_ratio(ratio) << "x (" << "Queue "
+                      << format_metric(queue_it->second) << " ops/sec vs STLQueue "
+                      << format_metric(stl_it->second) << " ops/sec)\n";
+        }
+    }
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1126,6 +1157,8 @@ int main(int argc, char** argv) {
     append_samples(bench_back<SeraphQueue>("Queue", iterations, repeats));
     append_samples(bench_back<STL>("STLQueue", iterations, repeats));
 
+    // Queue pop/front/back can consume two hazard slots per thread; keep thread counts
+    // bounded for reliable runs across debug/release builds.
     const std::vector<int> contention_threads = {2, 4, 8};
     const std::vector<int> push_percents = {50, 80, 20};
     for (const int thread_count : contention_threads) {
@@ -1192,6 +1225,7 @@ int main(int argc, char** argv) {
     write_svg_grouped_bars(aggregates, ops_svg_path, false);
     write_contention_svg(aggregates, contention_svg_path);
     write_mt_specialized_svg(aggregates, specialized_mt_svg_path);
+    print_mt_comparison_summary(aggregates);
 
     std::cout << "Queue performance benchmark complete.\n";
     std::cout << "Results CSV: " << csv_path << "\n";

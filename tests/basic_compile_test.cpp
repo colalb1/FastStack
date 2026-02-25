@@ -1,6 +1,8 @@
 #include "seraph/queue.hpp"
 #include "seraph/stack.hpp"
 
+#include <array>
+
 int main() {
     seraph::Stack<int> stack;
     stack.push(1);
@@ -59,6 +61,27 @@ int main() {
     }
 
     if (queue.pop().has_value()) {
+        return 1;
+    }
+
+    std::array<int, 4> values = {3, 4, 5, 6};
+    queue.push_range(values.begin(), values.end());
+
+    if (queue.size() != values.size()) {
+        return 1;
+    }
+
+    for (int expected : values) {
+        if (queue.front() != expected) {
+            return 1;
+        }
+
+        if (queue.pop() != expected) {
+            return 1;
+        }
+    }
+
+    if (!queue.empty()) {
         return 1;
     }
 
