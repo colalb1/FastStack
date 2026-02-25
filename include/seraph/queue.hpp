@@ -8,15 +8,46 @@ namespace seraph {
 
     template <typename T> class Queue {
       public:
-        using T = int;
-
         Queue() = default;
 
-        void enqueue(T value) {
+        [[nodiscard]] T front() const {
+            if (empty()) {
+                throw std::out_of_range("Cannot read front of an empty queue");
+            }
+
+            return storage_[head_];
+        }
+
+        [[nodiscard]] T back() const {
+            if (empty()) {
+                throw std::out_of_range("Cannot read front of an empty queue");
+            }
+
+            return storage_[0];
+        }
+
+        [[nodiscard]] bool empty() const noexcept {
+            return head_ >= storage_.size();
+        }
+
+        [[nodiscard]] std::size_t size() const noexcept {
+            return storage_.size() - head_;
+        }
+
+        void push(T value) {
             storage_.push_back(value);
         }
 
-        T dequeue() {
+        void push_range(T value) {
+            // push back multiples values
+        }
+
+        void emplace(T value) {
+            // construct element in-place
+            return;
+        }
+
+        T pop() {
             if (empty()) {
                 throw std::out_of_range("Cannot dequeue from an empty queue");
             }
@@ -35,25 +66,10 @@ namespace seraph {
             return value;
         }
 
-        [[nodiscard]] T front() const {
-            if (empty()) {
-                throw std::out_of_range("Cannot read front of an empty queue");
-            }
-
-            return storage_[head_];
+        void swap() {
+            // Exchanges the contents of the container adaptor with those of other
+            return;
         }
-
-        [[nodiscard]] bool empty() const noexcept {
-            return head_ >= storage_.size();
-        }
-
-        [[nodiscard]] std::size_t size() const noexcept {
-            return storage_.size() - head_;
-        }
-
-        // TODO(colin): Replace vector+head_ with a ring buffer to avoid erase compaction.
-        // TODO(colin): Template this queue so it supports arbitrary value types.
-        // TODO(colin): Add benchmarks for enqueue/dequeue under sustained load.
 
       private:
         static constexpr std::size_t kCompactionThreshold = 64;
