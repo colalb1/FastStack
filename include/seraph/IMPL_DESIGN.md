@@ -40,7 +40,7 @@ Hazard pointers were included in the implementation as `correctness` $\succ$ `sp
 
 Michael-Scott algorithm (linked list with an atomic head/tail). A ring buffer with a single producer and single consumer would technically be faster, but I would like this implementation to scale to four threads.
 
-Use a ring-buffer if you know the size.
+Use a ring-buffer if you know the amount of data you must store.
 
 
 ### `Ring Buffer`
