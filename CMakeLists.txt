@@ -50,6 +50,11 @@ if(SERAPH_BUILD_TESTS)
         tests/stack_performance_test.cpp
     )
     target_link_libraries(seraph_stack_perf PRIVATE seraph::seraph)
+
+    add_executable(seraph_queue_perf
+        tests/queue_performance_test.cpp
+    )
+    target_link_libraries(seraph_queue_perf PRIVATE seraph::seraph)
 endif()
 
 if(SERAPH_ENABLE_INSTALL)
