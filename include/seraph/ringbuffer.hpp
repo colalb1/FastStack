@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <optional>
 #include <vector>
@@ -26,36 +27,34 @@ namespace seraph {
         RingBuffer(const RingBuffer&) = delete;
         auto operator=(const RingBuffer&) -> RingBuffer& = delete;
 
+        // Create an lvalue and and rvalue version of this
         void push(const T& value) {
             return;
         }
 
-        void push(T&& value) {
-            return;
-        }
-
+        // This is the function that `push()` calls
         template <typename... Args> void emplace(Args&&... args) {
             return;
         }
 
         [[nodiscard]] auto pop() -> std::optional<T> {
-            return 0;
+            return;
         }
 
         [[nodiscard]] auto front() const -> std::optional<T> {
-            return 0;
+            return data_[head_].load(std::memory_order_acquire);
         }
 
         [[nodiscard]] auto back() const -> std::optional<T> {
-            return 0;
+            return data_[tail_].load(std::memory_order_acquire);
         }
 
         [[nodiscard]] auto empty() const noexcept -> bool {
-            return false;
+            return head_ == tail_;
         }
 
         [[nodiscard]] auto size() const noexcept -> std::size_t {
-            return size_.load(std::memory_order_acq_rel);
+            return tail_ - head_ + 1;
         }
     };
 } // namespace seraph
