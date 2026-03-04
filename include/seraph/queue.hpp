@@ -125,141 +125,6 @@ namespace seraph {
             retire_list_.resize(write_index);
         }
 
-        static void retire(Node* node) {
-            retire_list_.push_back(node);
-
-            if (retire_list_.size() >= k_retire_scan_threshold) {
-                scan();
-            }
-        }
-
-        void enqueue_node(Node* new_node) {
-            HazardRecord* hazard_tail(acquire_hazard(0));
-
-            while (true) {
-                Node* tail(tail_.load(std::memory_order_acquire));
-                hazard_tail->pointer.store(tail, std::memory_order_release);
-
-                if (tail != tail_.load(std::memory_order_acquire)) {
-                    continue;
-                }
-
-                Node* next(tail->next.load(std::memory_order_acquire));
-
-                if (tail != tail_.load(std::memory_order_acquire)) {
-                    continue;
-                }
-
-                if (next == nullptr) {
-                    Node* expected = nullptr;
-
-                    if (tail->next.compare_exchange_weak(
-                                expected,
-                                new_node,
-                                std::memory_order_release,
-                                std::memory_order_relaxed
-                        )) {
-                        tail_.compare_exchange_strong(
-                                tail,
-                                new_node,
-                                std::memory_order_release,
-                                std::memory_order_relaxed
-                        );
-                        size_.fetch_add(1, std::memory_order_relaxed);
-                        clear_local_hazard_pointers();
-                        return;
-                    }
-                }
-                else {
-                    tail_.compare_exchange_weak(
-                            tail,
-                            next,
-                            std::memory_order_release,
-                            std::memory_order_relaxed
-                    );
-                }
-            }
-        }
-
-        [[nodiscard]] auto front_impl() const -> std::optional<T> {
-            HazardRecord* hazard_head(acquire_hazard(0));
-            HazardRecord* hazard_next(acquire_hazard(1));
-
-            while (true) {
-                Node* head(head_.load(std::memory_order_acquire));
-                hazard_head->pointer.store(head, std::memory_order_release);
-
-                if (head != head_.load(std::memory_order_acquire)) {
-                    continue;
-                }
-
-                Node* next(head->next.load(std::memory_order_acquire));
-                hazard_next->pointer.store(next, std::memory_order_release);
-
-                if (head != head_.load(std::memory_order_acquire)) {
-                    continue;
-                }
-
-                if (next == nullptr) {
-                    clear_local_hazard_pointers();
-                    return std::nullopt;
-                }
-
-                std::optional<T> result(*(next->value));
-                clear_local_hazard_pointers();
-                return result;
-            }
-        }
-
-        [[nodiscard]] auto back_impl() const -> std::optional<T> {
-            HazardRecord* hazard_curr(acquire_hazard(0));
-            HazardRecord* hazard_next(acquire_hazard(1));
-
-            while (true) {
-                Node* head(head_.load(std::memory_order_acquire));
-                hazard_curr->pointer.store(head, std::memory_order_release);
-
-                if (head != head_.load(std::memory_order_acquire)) {
-                    continue;
-                }
-
-                Node* current(head->next.load(std::memory_order_acquire));
-                hazard_next->pointer.store(current, std::memory_order_release);
-
-                if (head != head_.load(std::memory_order_acquire)) {
-                    continue;
-                }
-
-                if (current == nullptr) {
-                    clear_local_hazard_pointers();
-                    return std::nullopt;
-                }
-
-                hazard_curr->pointer.store(current, std::memory_order_release);
-                hazard_next->pointer.store(nullptr, std::memory_order_release);
-
-                while (true) {
-                    Node* next(current->next.load(std::memory_order_acquire));
-
-                    if (next == nullptr) {
-                        std::optional<T> result(*(current->value));
-                        clear_local_hazard_pointers();
-                        return result;
-                    }
-
-                    hazard_next->pointer.store(next, std::memory_order_release);
-
-                    if (current->next.load(std::memory_order_acquire) != next) {
-                        continue;
-                    }
-
-                    current = next;
-                    hazard_curr->pointer.store(current, std::memory_order_release);
-                    hazard_next->pointer.store(nullptr, std::memory_order_release);
-                }
-            }
-        }
-
         void clear_live_nodes() noexcept {
             Node* node(head_.load(std::memory_order_relaxed));
 
@@ -318,7 +183,51 @@ namespace seraph {
 
         template <typename... Args> void emplace(Args&&... args) {
             Node* new_node(new Node(std::forward<Args>(args)...));
-            enqueue_node(new_node);
+            HazardRecord* hazard_tail(acquire_hazard(0));
+
+            while (true) {
+                Node* tail(tail_.load(std::memory_order_acquire));
+                hazard_tail->pointer.store(tail, std::memory_order_release);
+
+                if (tail != tail_.load(std::memory_order_acquire)) {
+                    continue;
+                }
+
+                Node* next(tail->next.load(std::memory_order_acquire));
+
+                if (tail != tail_.load(std::memory_order_acquire)) {
+                    continue;
+                }
+
+                if (next == nullptr) {
+                    Node* expected = nullptr;
+
+                    if (tail->next.compare_exchange_weak(
+                                expected,
+                                new_node,
+                                std::memory_order_release,
+                                std::memory_order_relaxed
+                        )) {
+                        tail_.compare_exchange_strong(
+                                tail,
+                                new_node,
+                                std::memory_order_release,
+                                std::memory_order_relaxed
+                        );
+                        size_.fetch_add(1, std::memory_order_relaxed);
+                        clear_local_hazard_pointers();
+                        return;
+                    }
+                }
+                else {
+                    tail_.compare_exchange_weak(
+                            tail,
+                            next,
+                            std::memory_order_release,
+                            std::memory_order_relaxed
+                    );
+                }
+            }
         }
 
         [[nodiscard]] auto pop() -> std::optional<T> {
@@ -365,18 +274,95 @@ namespace seraph {
                     size_.fetch_sub(1, std::memory_order_relaxed);
                     std::optional<T> result(std::move(*(next->value)));
                     clear_local_hazard_pointers();
-                    retire(head);
+
+                    retire_list_.push_back(node);
+
+                    if (retire_list_.size() >= k_retire_scan_threshold) {
+                        scan();
+                    }
+
                     return result;
                 }
             }
         }
 
         [[nodiscard]] auto front() const -> std::optional<T> {
-            return front_impl();
+            HazardRecord* hazard_head(acquire_hazard(0));
+            HazardRecord* hazard_next(acquire_hazard(1));
+
+            while (true) {
+                Node* head(head_.load(std::memory_order_acquire));
+                hazard_head->pointer.store(head, std::memory_order_release);
+
+                if (head != head_.load(std::memory_order_acquire)) {
+                    continue;
+                }
+
+                Node* next(head->next.load(std::memory_order_acquire));
+                hazard_next->pointer.store(next, std::memory_order_release);
+
+                if (head != head_.load(std::memory_order_acquire)) {
+                    continue;
+                }
+
+                if (next == nullptr) {
+                    clear_local_hazard_pointers();
+                    return std::nullopt;
+                }
+
+                std::optional<T> result(*(next->value));
+                clear_local_hazard_pointers();
+                return result;
+            }
         }
 
         [[nodiscard]] auto back() const -> std::optional<T> {
-            return back_impl();
+            HazardRecord* hazard_curr(acquire_hazard(0));
+            HazardRecord* hazard_next(acquire_hazard(1));
+
+            while (true) {
+                Node* head(head_.load(std::memory_order_acquire));
+                hazard_curr->pointer.store(head, std::memory_order_release);
+
+                if (head != head_.load(std::memory_order_acquire)) {
+                    continue;
+                }
+
+                Node* current(head->next.load(std::memory_order_acquire));
+                hazard_next->pointer.store(current, std::memory_order_release);
+
+                if (head != head_.load(std::memory_order_acquire)) {
+                    continue;
+                }
+
+                if (current == nullptr) {
+                    clear_local_hazard_pointers();
+                    return std::nullopt;
+                }
+
+                hazard_curr->pointer.store(current, std::memory_order_release);
+                hazard_next->pointer.store(nullptr, std::memory_order_release);
+
+                while (true) {
+                    Node* next(current->next.load(std::memory_order_acquire));
+
+                    if (next == nullptr) {
+                        std::optional<T> result(*(current->value));
+                        clear_local_hazard_pointers();
+                        return result;
+                    }
+
+                    hazard_next->pointer.store(next, std::memory_order_release);
+
+                    if (current->next.load(std::memory_order_acquire) != next) {
+                        continue;
+                    }
+
+                    current = next;
+                    hazard_curr->pointer.store(current, std::memory_order_release);
+                    hazard_next->pointer.store(nullptr, std::memory_order_release);
+                }
+            }
         }
 
         [[nodiscard]] auto empty() const noexcept -> bool {
