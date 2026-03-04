@@ -370,7 +370,7 @@ namespace seraph {
         }
 
         [[nodiscard]] auto size() const noexcept -> std::size_t {
-            return size_.load(std::memory_order_seq_cst);
+            return size_.load(std::memory_order_acq_rel);
         }
     };
 
