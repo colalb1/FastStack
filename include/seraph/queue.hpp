@@ -56,6 +56,7 @@ namespace seraph {
         static constexpr size_t k_local_hazard_slots{2};
         static constexpr size_t k_hazard_clear_interval{64};
         static constexpr size_t k_retire_scan_threshold{256};
+        static constexpr size_t k_retire_scan_budget{16};
 
         static HazardRecord hazard_records_[k_max_hazard_pointers];
         static thread_local std::array<HazardRecord*, k_local_hazard_slots> local_hazards_;
@@ -108,8 +109,8 @@ namespace seraph {
             hazard_ops_since_clear_ = 0;
         }
 
-        static void scan() {
-            if (retire_list_.empty()) {
+        static void scan_incremental(size_t scan_budget) {
+            if (retire_list_.empty() || scan_budget == 0) {
                 return;
             }
 
@@ -125,17 +126,22 @@ namespace seraph {
             }
 
             if (active_hazards == 0) {
-                for (Node* retired_node : retire_list_) {
-                    delete retired_node;
+                const size_t reclaim_count(
+                        (retire_list_.size() < scan_budget) ? retire_list_.size() : scan_budget
+                );
+
+                for (size_t iii{0}; iii < reclaim_count; ++iii) {
+                    delete retire_list_.back();
+                    retire_list_.pop_back();
                 }
 
-                retire_list_.clear();
                 return;
             }
 
-            size_t write_index{0};
+            size_t inspected{0};
+            size_t read_index{0};
 
-            for (size_t read_index{0}; read_index < retire_list_.size(); ++read_index) {
+            while (inspected < scan_budget && read_index < retire_list_.size()) {
                 Node* retired_node(retire_list_[read_index]);
                 bool keep_node{false};
 
@@ -145,16 +151,17 @@ namespace seraph {
                         break;
                     }
                 }
+                ++inspected;
 
                 if (keep_node) {
-                    retire_list_[write_index++] = retired_node;
+                    ++read_index;
                 }
                 else {
                     delete retired_node;
+                    retire_list_[read_index] = retire_list_.back();
+                    retire_list_.pop_back();
                 }
             }
-
-            retire_list_.resize(write_index);
         }
 
         static void retire_node(Node* node) {
@@ -165,7 +172,7 @@ namespace seraph {
             retire_list_.push_back(node);
 
             if (retire_list_.size() >= k_retire_scan_threshold) {
-                scan();
+                scan_incremental(k_retire_scan_budget);
             }
         }
 
