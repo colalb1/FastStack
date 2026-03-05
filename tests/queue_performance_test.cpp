@@ -182,12 +182,14 @@ namespace {
             while (!data_.push(value)) {
                 std::this_thread::yield();
             }
+            size_.fetch_add(1, std::memory_order_relaxed);
         }
 
         void push(int&& value) {
             while (!data_.push(std::move(value))) {
                 std::this_thread::yield();
             }
+            size_.fetch_add(1, std::memory_order_relaxed);
         }
 
         template <typename... Args> void emplace(Args&&... args) {
@@ -200,6 +202,7 @@ namespace {
             if (!data_.pop(value)) {
                 return std::nullopt;
             }
+            size_.fetch_sub(1, std::memory_order_relaxed);
             return value;
         }
 
@@ -207,8 +210,13 @@ namespace {
             return data_.empty();
         }
 
+        auto size() const noexcept -> std::size_t {
+            return size_.load(std::memory_order_relaxed);
+        }
+
       private:
         boost::lockfree::queue<int> data_;
+        std::atomic<std::size_t> size_{0};
     };
 #endif
 
