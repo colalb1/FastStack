@@ -193,11 +193,11 @@ namespace {
         return samples;
     }
 
-    template <typename Stack>
+    template <typename stack>
     std::vector<BenchmarkSample>
     bench_push_copy(std::string_view impl_name, std::size_t iterations, int repeats) {
         return run_samples(impl_name, "push_copy", iterations, repeats, [iterations]() {
-            Stack stack;
+            stack stack;
             const int value = 42;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
                 stack.push(value);
@@ -206,11 +206,11 @@ namespace {
         });
     }
 
-    template <typename Stack>
+    template <typename stack>
     std::vector<BenchmarkSample>
     bench_push_move(std::string_view impl_name, std::size_t iterations, int repeats) {
         return run_samples(impl_name, "push_move", iterations, repeats, [iterations]() {
-            Stack stack;
+            stack stack;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
                 int value = static_cast<int>(iii);
                 stack.push(std::move(value));
@@ -219,11 +219,11 @@ namespace {
         });
     }
 
-    template <typename Stack>
+    template <typename stack>
     std::vector<BenchmarkSample>
     bench_emplace(std::string_view impl_name, std::size_t iterations, int repeats) {
         return run_samples(impl_name, "emplace", iterations, repeats, [iterations]() {
-            Stack stack;
+            stack stack;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
                 stack.emplace(static_cast<int>(iii));
             }
@@ -231,11 +231,11 @@ namespace {
         });
     }
 
-    template <typename Stack>
+    template <typename stack>
     std::vector<BenchmarkSample>
     bench_pop(std::string_view impl_name, std::size_t iterations, int repeats) {
         return run_samples(impl_name, "pop", iterations, repeats, [iterations]() {
-            Stack stack;
+            stack stack;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
                 stack.emplace(static_cast<int>(iii));
             }
@@ -251,11 +251,11 @@ namespace {
         });
     }
 
-    template <typename Stack>
+    template <typename stack>
     std::vector<BenchmarkSample>
     bench_size(std::string_view impl_name, std::size_t iterations, int repeats) {
         return run_samples(impl_name, "size", iterations, repeats, [iterations]() {
-            Stack stack;
+            stack stack;
             for (std::size_t iii = 0; iii < 1024; ++iii) {
                 stack.emplace(static_cast<int>(iii));
             }
@@ -268,11 +268,11 @@ namespace {
         });
     }
 
-    template <typename Stack>
+    template <typename stack>
     std::vector<BenchmarkSample>
     bench_empty(std::string_view impl_name, std::size_t iterations, int repeats) {
         return run_samples(impl_name, "empty", iterations, repeats, [iterations]() {
-            Stack stack;
+            stack stack;
             stack.emplace(1);
             std::uint64_t local_sum = 0;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
@@ -282,11 +282,11 @@ namespace {
         });
     }
 
-    template <typename Stack>
+    template <typename stack>
     std::vector<BenchmarkSample>
     bench_top(std::string_view impl_name, std::size_t iterations, int repeats) {
         return run_samples(impl_name, "top", iterations, repeats, [iterations]() {
-            Stack stack;
+            stack stack;
             stack.emplace(7);
             std::uint64_t local_sum = 0;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
@@ -300,8 +300,8 @@ namespace {
     }
 
     std::vector<BenchmarkSample> bench_reserve_stack(std::size_t iterations, int repeats) {
-        return run_samples("Stack", "reserve", iterations, repeats, [iterations]() {
-            seraph::Stack<int> stack;
+        return run_samples("stack", "reserve", iterations, repeats, [iterations]() {
+            seraph::stack<int> stack;
             for (std::size_t iii = 1; iii <= iterations; ++iii) {
                 stack.reserve(iii);
             }
@@ -315,7 +315,7 @@ namespace {
                std::to_string(push_percent) + "_pop" + std::to_string(pop_percent);
     }
 
-    template <typename Stack>
+    template <typename stack>
     std::vector<BenchmarkSample> bench_contention_mix(
             std::string_view impl_name,
             int thread_count,
@@ -331,7 +331,7 @@ namespace {
                 total_ops,
                 repeats,
                 [thread_count, push_percent, ops_per_thread]() {
-                    Stack stack;
+                    stack stack;
                     for (std::size_t iii = 0;
                          iii < static_cast<std::size_t>(thread_count) * ops_per_thread;
                          ++iii) {
@@ -389,7 +389,7 @@ namespace {
         return "mt_" + std::string(mode) + "_t" + std::to_string(thread_count);
     }
 
-    template <typename Stack>
+    template <typename stack>
     std::vector<BenchmarkSample> bench_mt_push_only(
             std::string_view impl_name,
             int thread_count,
@@ -404,7 +404,7 @@ namespace {
                 total_ops,
                 repeats,
                 [thread_count, ops_per_thread]() {
-                    Stack stack;
+                    stack stack;
                     std::barrier sync_start(thread_count + 1);
                     std::vector<std::thread> workers;
                     workers.reserve(static_cast<std::size_t>(thread_count));
@@ -429,7 +429,7 @@ namespace {
         );
     }
 
-    template <typename Stack>
+    template <typename stack>
     std::vector<BenchmarkSample> bench_mt_pop_only(
             std::string_view impl_name,
             int thread_count,
@@ -444,7 +444,7 @@ namespace {
                 total_ops,
                 repeats,
                 [thread_count, ops_per_thread, total_ops]() {
-                    Stack stack;
+                    stack stack;
                     for (std::size_t iii = 0; iii < total_ops; ++iii) {
                         stack.emplace(static_cast<int>(iii));
                     }
@@ -544,7 +544,7 @@ namespace {
     }
 
     std::string color_for_impl(std::string_view impl) {
-        if (impl == "Stack") {
+        if (impl == "stack") {
             return "#2a9d8f";
         }
         if (impl == "STLStack") {
@@ -572,7 +572,7 @@ namespace {
             }
         }
 
-        const std::vector<std::string> impls = {"Stack", "STLStack"};
+        const std::vector<std::string> impls = {"stack", "STLStack"};
 
         std::map<std::string, std::map<std::string, double>> metric_by_op_impl;
         double max_metric = 0.0;
@@ -601,7 +601,7 @@ namespace {
             << "\" fill=\"#ffffff\"/>\n";
         out << "<text x=\"" << width / 2
             << "\" y=\"40\" text-anchor=\"middle\" font-size=\"26\" font-family=\"Menlo, "
-               "monospace\" fill=\"#111111\">Stack Performance Average: "
+               "monospace\" fill=\"#111111\">stack Performance Average: "
             << (use_ns_metric ? "ns/op (lower is better)" : "ops/sec (higher is better)")
             << "</text>\n";
         out << "<text x=\"28\" y=\"" << (margin_top + plot_h / 2.0)
@@ -1059,29 +1059,29 @@ int main(int argc, char** argv) {
         );
     };
 
-    using SeraphStack = seraph::Stack<int>;
+    using SeraphStack = seraph::stack<int>;
     using STL = STLStackAdapter;
     using STLContention = ThreadSafeSTLStackAdapter;
 
-    append_samples(bench_push_copy<SeraphStack>("Stack", iterations, repeats));
+    append_samples(bench_push_copy<SeraphStack>("stack", iterations, repeats));
     append_samples(bench_push_copy<STL>("STLStack", iterations, repeats));
 
-    append_samples(bench_push_move<SeraphStack>("Stack", iterations, repeats));
+    append_samples(bench_push_move<SeraphStack>("stack", iterations, repeats));
     append_samples(bench_push_move<STL>("STLStack", iterations, repeats));
 
-    append_samples(bench_emplace<SeraphStack>("Stack", iterations, repeats));
+    append_samples(bench_emplace<SeraphStack>("stack", iterations, repeats));
     append_samples(bench_emplace<STL>("STLStack", iterations, repeats));
 
-    append_samples(bench_pop<SeraphStack>("Stack", iterations, repeats));
+    append_samples(bench_pop<SeraphStack>("stack", iterations, repeats));
     append_samples(bench_pop<STL>("STLStack", iterations, repeats));
 
-    append_samples(bench_size<SeraphStack>("Stack", iterations, repeats));
+    append_samples(bench_size<SeraphStack>("stack", iterations, repeats));
     append_samples(bench_size<STL>("STLStack", iterations, repeats));
 
-    append_samples(bench_empty<SeraphStack>("Stack", iterations, repeats));
+    append_samples(bench_empty<SeraphStack>("stack", iterations, repeats));
     append_samples(bench_empty<STL>("STLStack", iterations, repeats));
 
-    append_samples(bench_top<SeraphStack>("Stack", iterations, repeats));
+    append_samples(bench_top<SeraphStack>("stack", iterations, repeats));
     append_samples(bench_top<STL>("STLStack", iterations, repeats));
     append_samples(bench_reserve_stack(iterations, repeats));
 
@@ -1090,7 +1090,7 @@ int main(int argc, char** argv) {
     for (const int thread_count : contention_threads) {
         for (const int push_percent : push_percents) {
             append_samples(bench_contention_mix<SeraphStack>(
-                    "Stack",
+                    "stack",
                     thread_count,
                     push_percent,
                     contention_ops_per_thread,
@@ -1108,7 +1108,7 @@ int main(int argc, char** argv) {
 
     for (const int thread_count : contention_threads) {
         append_samples(bench_mt_push_only<SeraphStack>(
-                "Stack",
+                "stack",
                 thread_count,
                 specialized_ops_per_thread,
                 repeats
@@ -1121,7 +1121,7 @@ int main(int argc, char** argv) {
         ));
 
         append_samples(bench_mt_pop_only<SeraphStack>(
-                "Stack",
+                "stack",
                 thread_count,
                 specialized_ops_per_thread,
                 repeats
@@ -1152,7 +1152,7 @@ int main(int argc, char** argv) {
     write_contention_svg(aggregates, contention_svg_path);
     write_mt_specialized_svg(aggregates, specialized_mt_svg_path);
 
-    std::cout << "Stack performance benchmark complete.\n";
+    std::cout << "stack performance benchmark complete.\n";
     std::cout << "Results CSV: " << csv_path << "\n";
     std::cout << "Graph (ns/op, averaged): " << ns_svg_path << "\n";
     std::cout << "Graph (ops/sec, averaged): " << ops_svg_path << "\n";

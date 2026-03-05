@@ -4,7 +4,7 @@
 #include <array>
 
 int main() {
-    seraph::Stack<int> stack;
+    seraph::stack<int> stack;
     stack.push(1);
     stack.push(2);
 
@@ -16,7 +16,7 @@ int main() {
         return 1;
     }
 
-    seraph::Stack<int> adaptive_stack;
+    seraph::stack<int> adaptive_stack;
     adaptive_stack.push(10);
     adaptive_stack.emplace(20);
 
