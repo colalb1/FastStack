@@ -54,11 +54,13 @@ namespace seraph {
 
         static constexpr size_t k_max_hazard_pointers{32};
         static constexpr size_t k_local_hazard_slots{2};
-        static constexpr size_t k_retire_scan_threshold{64};
+        static constexpr size_t k_hazard_clear_interval{64};
+        static constexpr size_t k_retire_scan_threshold{256};
 
         static HazardRecord hazard_records_[k_max_hazard_pointers];
         static thread_local std::array<HazardRecord*, k_local_hazard_slots> local_hazards_;
         static thread_local HazardReleaser hazard_releaser_;
+        static thread_local size_t hazard_ops_since_clear_;
         static thread_local std::vector<Node*> retire_list_;
 
         static auto acquire_hazard(size_t slot) -> HazardRecord* {
@@ -94,11 +96,41 @@ namespace seraph {
             }
         }
 
+        static void maybe_clear_local_hazard_pointers(bool force = false) {
+            if (!force) {
+                ++hazard_ops_since_clear_;
+                if (hazard_ops_since_clear_ < k_hazard_clear_interval) {
+                    return;
+                }
+            }
+
+            clear_local_hazard_pointers();
+            hazard_ops_since_clear_ = 0;
+        }
+
         static void scan() {
+            if (retire_list_.empty()) {
+                return;
+            }
+
             std::array<Node*, k_max_hazard_pointers> hazard_snapshot{};
+            size_t active_hazards{0};
 
             for (size_t iii{0}; iii < k_max_hazard_pointers; ++iii) {
-                hazard_snapshot[iii] = hazard_records_[iii].pointer.load(std::memory_order_acquire);
+                Node* hazard_ptr(hazard_records_[iii].pointer.load(std::memory_order_acquire));
+
+                if (hazard_ptr) {
+                    hazard_snapshot[active_hazards++] = hazard_ptr;
+                }
+            }
+
+            if (active_hazards == 0) {
+                for (Node* retired_node : retire_list_) {
+                    delete retired_node;
+                }
+
+                retire_list_.clear();
+                return;
             }
 
             size_t write_index{0};
@@ -107,8 +139,8 @@ namespace seraph {
                 Node* retired_node(retire_list_[read_index]);
                 bool keep_node{false};
 
-                for (Node* hazard_node : hazard_snapshot) {
-                    if (hazard_node == retired_node) {
+                for (size_t iii{0}; iii < active_hazards; ++iii) {
+                    if (hazard_snapshot[iii] == retired_node) {
                         keep_node = true;
                         break;
                     }
@@ -123,6 +155,18 @@ namespace seraph {
             }
 
             retire_list_.resize(write_index);
+        }
+
+        static void retire_node(Node* node) {
+            if (retire_list_.capacity() < k_retire_scan_threshold) {
+                retire_list_.reserve(k_retire_scan_threshold);
+            }
+
+            retire_list_.push_back(node);
+
+            if (retire_list_.size() >= k_retire_scan_threshold) {
+                scan();
+            }
         }
 
         void clear_live_nodes() noexcept {
@@ -215,7 +259,7 @@ namespace seraph {
                                 std::memory_order_relaxed
                         );
                         size_.fetch_add(1, std::memory_order_relaxed);
-                        clear_local_hazard_pointers();
+                        maybe_clear_local_hazard_pointers();
                         return;
                     }
                 }
@@ -250,7 +294,7 @@ namespace seraph {
                 }
 
                 if (next == nullptr) {
-                    clear_local_hazard_pointers();
+                    maybe_clear_local_hazard_pointers();
                     return std::nullopt;
                 }
 
@@ -273,13 +317,9 @@ namespace seraph {
                     )) {
                     size_.fetch_sub(1, std::memory_order_relaxed);
                     std::optional<T> result(std::move(*(next->value)));
-                    clear_local_hazard_pointers();
+                    maybe_clear_local_hazard_pointers();
 
-                    retire_list_.push_back(head);
-
-                    if (retire_list_.size() >= k_retire_scan_threshold) {
-                        scan();
-                    }
+                    retire_node(head);
 
                     return result;
                 }
@@ -306,12 +346,12 @@ namespace seraph {
                 }
 
                 if (next == nullptr) {
-                    clear_local_hazard_pointers();
+                    maybe_clear_local_hazard_pointers();
                     return std::nullopt;
                 }
 
                 std::optional<T> result(*(next->value));
-                clear_local_hazard_pointers();
+                maybe_clear_local_hazard_pointers();
                 return result;
             }
         }
@@ -336,7 +376,7 @@ namespace seraph {
                 }
 
                 if (current == nullptr) {
-                    clear_local_hazard_pointers();
+                    maybe_clear_local_hazard_pointers();
                     return std::nullopt;
                 }
 
@@ -348,7 +388,7 @@ namespace seraph {
 
                     if (next == nullptr) {
                         std::optional<T> result(*(current->value));
-                        clear_local_hazard_pointers();
+                        maybe_clear_local_hazard_pointers();
                         return result;
                     }
 
@@ -370,7 +410,7 @@ namespace seraph {
         }
 
         [[nodiscard]] auto size() const noexcept -> std::size_t {
-            return size_.load(std::memory_order_acq_rel);
+            return size_.load(std::memory_order_acquire);
         }
     };
 
@@ -380,6 +420,7 @@ namespace seraph {
     thread_local std::array<typename queue<T>::HazardRecord*, queue<T>::k_local_hazard_slots>
             queue<T>::local_hazards_{};
     template <typename T> thread_local typename queue<T>::HazardReleaser queue<T>::hazard_releaser_;
+    template <typename T> thread_local size_t queue<T>::hazard_ops_since_clear_{0};
     template <typename T> thread_local std::vector<typename queue<T>::Node*> queue<T>::retire_list_;
 
 } // namespace seraph
