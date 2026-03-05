@@ -21,6 +21,17 @@
 #include <utility>
 #include <vector>
 
+#if defined(__has_include)
+#if __has_include(<boost/lockfree/stack.hpp>)
+#include <boost/lockfree/stack.hpp>
+#define SERAPH_HAS_BOOST_LOCKFREE_STACK 1
+#endif
+#endif
+
+#ifndef SERAPH_HAS_BOOST_LOCKFREE_STACK
+#define SERAPH_HAS_BOOST_LOCKFREE_STACK 0
+#endif
+
 namespace {
     using Clock = std::chrono::steady_clock;
 
@@ -139,6 +150,45 @@ namespace {
         std::stack<int, std::vector<int>> data_;
     };
 
+#if SERAPH_HAS_BOOST_LOCKFREE_STACK
+    class BoostLockfreeStackAdapter {
+      public:
+        BoostLockfreeStackAdapter() : data_(1024) {}
+
+        void push(const int& value) {
+            while (!data_.push(value)) {
+                std::this_thread::yield();
+            }
+        }
+
+        void push(int&& value) {
+            while (!data_.push(std::move(value))) {
+                std::this_thread::yield();
+            }
+        }
+
+        template <typename... Args> void emplace(Args&&... args) {
+            int value(std::forward<Args>(args)...);
+            push(std::move(value));
+        }
+
+        std::optional<int> pop() {
+            int value = 0;
+            if (!data_.pop(value)) {
+                return std::nullopt;
+            }
+            return value;
+        }
+
+        bool empty() const noexcept {
+            return data_.empty();
+        }
+
+      private:
+        boost::lockfree::stack<int> data_;
+    };
+#endif
+
     std::filesystem::path find_repo_root() {
         std::filesystem::path current = std::filesystem::current_path();
 
@@ -193,11 +243,11 @@ namespace {
         return samples;
     }
 
-    template <typename stack>
+    template <typename StackType>
     std::vector<BenchmarkSample>
     bench_push_copy(std::string_view impl_name, std::size_t iterations, int repeats) {
         return run_samples(impl_name, "push_copy", iterations, repeats, [iterations]() {
-            stack stack;
+            StackType stack;
             const int value = 42;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
                 stack.push(value);
@@ -206,11 +256,11 @@ namespace {
         });
     }
 
-    template <typename stack>
+    template <typename StackType>
     std::vector<BenchmarkSample>
     bench_push_move(std::string_view impl_name, std::size_t iterations, int repeats) {
         return run_samples(impl_name, "push_move", iterations, repeats, [iterations]() {
-            stack stack;
+            StackType stack;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
                 int value = static_cast<int>(iii);
                 stack.push(std::move(value));
@@ -219,11 +269,11 @@ namespace {
         });
     }
 
-    template <typename stack>
+    template <typename StackType>
     std::vector<BenchmarkSample>
     bench_emplace(std::string_view impl_name, std::size_t iterations, int repeats) {
         return run_samples(impl_name, "emplace", iterations, repeats, [iterations]() {
-            stack stack;
+            StackType stack;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
                 stack.emplace(static_cast<int>(iii));
             }
@@ -231,11 +281,11 @@ namespace {
         });
     }
 
-    template <typename stack>
+    template <typename StackType>
     std::vector<BenchmarkSample>
     bench_pop(std::string_view impl_name, std::size_t iterations, int repeats) {
         return run_samples(impl_name, "pop", iterations, repeats, [iterations]() {
-            stack stack;
+            StackType stack;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
                 stack.emplace(static_cast<int>(iii));
             }
@@ -251,11 +301,11 @@ namespace {
         });
     }
 
-    template <typename stack>
+    template <typename StackType>
     std::vector<BenchmarkSample>
     bench_size(std::string_view impl_name, std::size_t iterations, int repeats) {
         return run_samples(impl_name, "size", iterations, repeats, [iterations]() {
-            stack stack;
+            StackType stack;
             for (std::size_t iii = 0; iii < 1024; ++iii) {
                 stack.emplace(static_cast<int>(iii));
             }
@@ -268,11 +318,11 @@ namespace {
         });
     }
 
-    template <typename stack>
+    template <typename StackType>
     std::vector<BenchmarkSample>
     bench_empty(std::string_view impl_name, std::size_t iterations, int repeats) {
         return run_samples(impl_name, "empty", iterations, repeats, [iterations]() {
-            stack stack;
+            StackType stack;
             stack.emplace(1);
             std::uint64_t local_sum = 0;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
@@ -282,11 +332,11 @@ namespace {
         });
     }
 
-    template <typename stack>
+    template <typename StackType>
     std::vector<BenchmarkSample>
     bench_top(std::string_view impl_name, std::size_t iterations, int repeats) {
         return run_samples(impl_name, "top", iterations, repeats, [iterations]() {
-            stack stack;
+            StackType stack;
             stack.emplace(7);
             std::uint64_t local_sum = 0;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
@@ -315,7 +365,7 @@ namespace {
                std::to_string(push_percent) + "_pop" + std::to_string(pop_percent);
     }
 
-    template <typename stack>
+    template <typename StackType>
     std::vector<BenchmarkSample> bench_contention_mix(
             std::string_view impl_name,
             int thread_count,
@@ -331,7 +381,7 @@ namespace {
                 total_ops,
                 repeats,
                 [thread_count, push_percent, ops_per_thread]() {
-                    stack stack;
+                    StackType stack;
                     for (std::size_t iii = 0;
                          iii < static_cast<std::size_t>(thread_count) * ops_per_thread;
                          ++iii) {
@@ -389,7 +439,7 @@ namespace {
         return "mt_" + std::string(mode) + "_t" + std::to_string(thread_count);
     }
 
-    template <typename stack>
+    template <typename StackType>
     std::vector<BenchmarkSample> bench_mt_push_only(
             std::string_view impl_name,
             int thread_count,
@@ -404,7 +454,7 @@ namespace {
                 total_ops,
                 repeats,
                 [thread_count, ops_per_thread]() {
-                    stack stack;
+                    StackType stack;
                     std::barrier sync_start(thread_count + 1);
                     std::vector<std::thread> workers;
                     workers.reserve(static_cast<std::size_t>(thread_count));
@@ -429,7 +479,7 @@ namespace {
         );
     }
 
-    template <typename stack>
+    template <typename StackType>
     std::vector<BenchmarkSample> bench_mt_pop_only(
             std::string_view impl_name,
             int thread_count,
@@ -444,7 +494,7 @@ namespace {
                 total_ops,
                 repeats,
                 [thread_count, ops_per_thread, total_ops]() {
-                    stack stack;
+                    StackType stack;
                     for (std::size_t iii = 0; iii < total_ops; ++iii) {
                         stack.emplace(static_cast<int>(iii));
                     }
@@ -550,6 +600,9 @@ namespace {
         if (impl == "STLStack") {
             return "#264653";
         }
+        if (impl == "BoostStack") {
+            return "#e76f51";
+        }
         return "#e76f51";
     }
 
@@ -572,7 +625,10 @@ namespace {
             }
         }
 
-        const std::vector<std::string> impls = {"stack", "STLStack"};
+        std::vector<std::string> impls = {"stack", "STLStack"};
+#if SERAPH_HAS_BOOST_LOCKFREE_STACK
+        impls.push_back("BoostStack");
+#endif
 
         std::map<std::string, std::map<std::string, double>> metric_by_op_impl;
         double max_metric = 0.0;
@@ -1062,24 +1118,42 @@ int main(int argc, char** argv) {
     using SeraphStack = seraph::stack<int>;
     using STL = STLStackAdapter;
     using STLContention = ThreadSafeSTLStackAdapter;
+#if SERAPH_HAS_BOOST_LOCKFREE_STACK
+    using BoostStack = BoostLockfreeStackAdapter;
+#endif
 
     append_samples(bench_push_copy<SeraphStack>("stack", iterations, repeats));
     append_samples(bench_push_copy<STL>("STLStack", iterations, repeats));
+#if SERAPH_HAS_BOOST_LOCKFREE_STACK
+    append_samples(bench_push_copy<BoostStack>("BoostStack", iterations, repeats));
+#endif
 
     append_samples(bench_push_move<SeraphStack>("stack", iterations, repeats));
     append_samples(bench_push_move<STL>("STLStack", iterations, repeats));
+#if SERAPH_HAS_BOOST_LOCKFREE_STACK
+    append_samples(bench_push_move<BoostStack>("BoostStack", iterations, repeats));
+#endif
 
     append_samples(bench_emplace<SeraphStack>("stack", iterations, repeats));
     append_samples(bench_emplace<STL>("STLStack", iterations, repeats));
+#if SERAPH_HAS_BOOST_LOCKFREE_STACK
+    append_samples(bench_emplace<BoostStack>("BoostStack", iterations, repeats));
+#endif
 
     append_samples(bench_pop<SeraphStack>("stack", iterations, repeats));
     append_samples(bench_pop<STL>("STLStack", iterations, repeats));
+#if SERAPH_HAS_BOOST_LOCKFREE_STACK
+    append_samples(bench_pop<BoostStack>("BoostStack", iterations, repeats));
+#endif
 
     append_samples(bench_size<SeraphStack>("stack", iterations, repeats));
     append_samples(bench_size<STL>("STLStack", iterations, repeats));
 
     append_samples(bench_empty<SeraphStack>("stack", iterations, repeats));
     append_samples(bench_empty<STL>("STLStack", iterations, repeats));
+#if SERAPH_HAS_BOOST_LOCKFREE_STACK
+    append_samples(bench_empty<BoostStack>("BoostStack", iterations, repeats));
+#endif
 
     append_samples(bench_top<SeraphStack>("stack", iterations, repeats));
     append_samples(bench_top<STL>("STLStack", iterations, repeats));
@@ -1103,6 +1177,15 @@ int main(int argc, char** argv) {
                     contention_ops_per_thread,
                     repeats
             ));
+#if SERAPH_HAS_BOOST_LOCKFREE_STACK
+            append_samples(bench_contention_mix<BoostStack>(
+                    "BoostStack",
+                    thread_count,
+                    push_percent,
+                    contention_ops_per_thread,
+                    repeats
+            ));
+#endif
         }
     }
 
@@ -1119,6 +1202,14 @@ int main(int argc, char** argv) {
                 specialized_ops_per_thread,
                 repeats
         ));
+#if SERAPH_HAS_BOOST_LOCKFREE_STACK
+        append_samples(bench_mt_push_only<BoostStack>(
+                "BoostStack",
+                thread_count,
+                specialized_ops_per_thread,
+                repeats
+        ));
+#endif
 
         append_samples(bench_mt_pop_only<SeraphStack>(
                 "stack",
@@ -1132,6 +1223,14 @@ int main(int argc, char** argv) {
                 specialized_ops_per_thread,
                 repeats
         ));
+#if SERAPH_HAS_BOOST_LOCKFREE_STACK
+        append_samples(bench_mt_pop_only<BoostStack>(
+                "BoostStack",
+                thread_count,
+                specialized_ops_per_thread,
+                repeats
+        ));
+#endif
     }
 
     const auto aggregates = build_aggregates(samples);
@@ -1158,6 +1257,9 @@ int main(int argc, char** argv) {
     std::cout << "Graph (ops/sec, averaged): " << ops_svg_path << "\n";
     std::cout << "Graph (contention ops/sec, averaged): " << contention_svg_path << "\n";
     std::cout << "Graph (specialized mt ops/sec, averaged): " << specialized_mt_svg_path << "\n";
+#if !SERAPH_HAS_BOOST_LOCKFREE_STACK
+    std::cout << "Boost lockfree stack headers not found; BoostStack comparison skipped.\n";
+#endif
     std::cout << "Sink: " << g_sink << "\n";
 
     return 0;

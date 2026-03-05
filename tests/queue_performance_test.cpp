@@ -1,6 +1,7 @@
 #include "seraph/queue.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <barrier>
 #include <chrono>
@@ -21,6 +22,17 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#if defined(__has_include)
+#if __has_include(<boost/lockfree/queue.hpp>)
+#include <boost/lockfree/queue.hpp>
+#define SERAPH_HAS_BOOST_LOCKFREE_QUEUE 1
+#endif
+#endif
+
+#ifndef SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+#define SERAPH_HAS_BOOST_LOCKFREE_QUEUE 0
+#endif
 
 namespace {
     using Clock = std::chrono::steady_clock;
@@ -46,7 +58,7 @@ namespace {
         double max_nanoseconds_per_op;
     };
 
-    const volatile std::uint64_t g_sink = 0;
+    volatile std::uint64_t g_sink = 0;
 
     class STLQueueAdapter {
       public:
@@ -161,6 +173,45 @@ namespace {
         std::queue<int, std::deque<int>> data_;
     };
 
+#if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+    class BoostLockfreeQueueAdapter {
+      public:
+        BoostLockfreeQueueAdapter() : data_(1024) {}
+
+        void push(const int& value) {
+            while (!data_.push(value)) {
+                std::this_thread::yield();
+            }
+        }
+
+        void push(int&& value) {
+            while (!data_.push(std::move(value))) {
+                std::this_thread::yield();
+            }
+        }
+
+        template <typename... Args> void emplace(Args&&... args) {
+            int value(std::forward<Args>(args)...);
+            push(std::move(value));
+        }
+
+        auto pop() -> std::optional<int> {
+            int value = 0;
+            if (!data_.pop(value)) {
+                return std::nullopt;
+            }
+            return value;
+        }
+
+        auto empty() const noexcept -> bool {
+            return data_.empty();
+        }
+
+      private:
+        boost::lockfree::queue<int> data_;
+    };
+#endif
+
     auto find_repo_root() -> std::filesystem::path {
         std::filesystem::path current = std::filesystem::current_path();
 
@@ -215,11 +266,11 @@ namespace {
         return samples;
     }
 
-    template <typename queue>
+    template <typename QueueType>
     auto bench_push_copy(std::string_view impl_name, std::size_t iterations, int repeats)
             -> std::vector<BenchmarkSample> {
         return run_samples(impl_name, "push_copy", iterations, repeats, [iterations]() {
-            queue queue;
+            QueueType queue;
             const int value = 42;
 
             for (std::size_t iii = 0; iii < iterations; ++iii) {
@@ -229,11 +280,11 @@ namespace {
         });
     }
 
-    template <typename queue>
+    template <typename QueueType>
     auto bench_push_move(std::string_view impl_name, std::size_t iterations, int repeats)
             -> std::vector<BenchmarkSample> {
         return run_samples(impl_name, "push_move", iterations, repeats, [iterations]() {
-            queue queue;
+            QueueType queue;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
                 int value = static_cast<int>(iii);
                 queue.push(std::move(value));
@@ -242,11 +293,11 @@ namespace {
         });
     }
 
-    template <typename queue>
+    template <typename QueueType>
     auto bench_emplace(std::string_view impl_name, std::size_t iterations, int repeats)
             -> std::vector<BenchmarkSample> {
         return run_samples(impl_name, "emplace", iterations, repeats, [iterations]() {
-            queue queue;
+            QueueType queue;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
                 queue.emplace(static_cast<int>(iii));
             }
@@ -254,11 +305,11 @@ namespace {
         });
     }
 
-    template <typename queue>
+    template <typename QueueType>
     auto bench_pop(std::string_view impl_name, std::size_t iterations, int repeats)
             -> std::vector<BenchmarkSample> {
         return run_samples(impl_name, "pop", iterations, repeats, [iterations]() {
-            queue queue;
+            QueueType queue;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
                 queue.emplace(static_cast<int>(iii));
             }
@@ -274,11 +325,11 @@ namespace {
         });
     }
 
-    template <typename queue>
+    template <typename QueueType>
     auto bench_front(std::string_view impl_name, std::size_t iterations, int repeats)
             -> std::vector<BenchmarkSample> {
         return run_samples(impl_name, "front", iterations, repeats, [iterations]() {
-            queue queue;
+            QueueType queue;
             queue.emplace(7);
 
             std::uint64_t local_sum = 0;
@@ -292,11 +343,11 @@ namespace {
         });
     }
 
-    template <typename queue>
+    template <typename QueueType>
     auto bench_back(std::string_view impl_name, std::size_t iterations, int repeats)
             -> std::vector<BenchmarkSample> {
         return run_samples(impl_name, "back", iterations, repeats, [iterations]() {
-            queue queue;
+            QueueType queue;
             queue.emplace(11);
 
             std::uint64_t local_sum = 0;
@@ -310,11 +361,11 @@ namespace {
         });
     }
 
-    template <typename queue>
+    template <typename QueueType>
     auto bench_size(std::string_view impl_name, std::size_t iterations, int repeats)
             -> std::vector<BenchmarkSample> {
         return run_samples(impl_name, "size", iterations, repeats, [iterations]() {
-            queue queue;
+            QueueType queue;
             for (std::size_t iii = 0; iii < 1024; ++iii) {
                 queue.emplace(static_cast<int>(iii));
             }
@@ -327,11 +378,11 @@ namespace {
         });
     }
 
-    template <typename queue>
+    template <typename QueueType>
     auto bench_empty(std::string_view impl_name, std::size_t iterations, int repeats)
             -> std::vector<BenchmarkSample> {
         return run_samples(impl_name, "empty", iterations, repeats, [iterations]() {
-            queue queue;
+            QueueType queue;
             queue.emplace(1);
 
             std::uint64_t local_sum = 0;
@@ -348,7 +399,7 @@ namespace {
                std::to_string(push_percent) + "_pop" + std::to_string(pop_percent);
     }
 
-    template <typename queue>
+    template <typename QueueType>
     auto bench_contention_mix(
             std::string_view impl_name,
             int thread_count,
@@ -365,7 +416,7 @@ namespace {
                 total_ops,
                 repeats,
                 [thread_count, push_percent, ops_per_thread]() {
-                    queue queue;
+                    QueueType queue;
                     for (std::size_t iii = 0;
                          iii < static_cast<std::size_t>(thread_count) * ops_per_thread;
                          ++iii) {
@@ -422,7 +473,7 @@ namespace {
         return "mt_" + std::string(mode) + "_t" + std::to_string(thread_count);
     }
 
-    template <typename queue>
+    template <typename QueueType>
     auto bench_mt_push_only(
             std::string_view impl_name,
             int thread_count,
@@ -438,7 +489,7 @@ namespace {
                 total_ops,
                 repeats,
                 [thread_count, ops_per_thread]() {
-                    queue queue;
+                    QueueType queue;
                     std::barrier sync_start(thread_count + 1);
                     std::vector<std::thread> workers;
                     workers.reserve(static_cast<std::size_t>(thread_count));
@@ -464,7 +515,7 @@ namespace {
         );
     }
 
-    template <typename queue>
+    template <typename QueueType>
     auto bench_mt_pop_only(
             std::string_view impl_name,
             int thread_count,
@@ -480,7 +531,7 @@ namespace {
                 total_ops,
                 repeats,
                 [thread_count, ops_per_thread, total_ops]() {
-                    queue queue;
+                    QueueType queue;
                     for (std::size_t iii = 0; iii < total_ops; ++iii) {
                         queue.emplace(static_cast<int>(iii));
                     }
@@ -588,6 +639,9 @@ namespace {
         if (impl == "STLQueue") {
             return "#264653";
         }
+        if (impl == "BoostQueue") {
+            return "#e76f51";
+        }
         return "#e76f51";
     }
 
@@ -616,7 +670,10 @@ namespace {
             }
         }
 
-        const std::vector<std::string> impls = {"queue", "STLQueue"};
+        std::vector<std::string> impls = {"queue", "STLQueue"};
+#if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+        impls.push_back("BoostQueue");
+#endif
 
         std::map<std::string, std::map<std::string, double>> metric_by_op_impl;
         double max_metric = 0.0;
@@ -1073,18 +1130,37 @@ namespace {
             mt_ops[aggregate.operation][aggregate.implementation] = aggregate.avg_ops_per_second;
         }
 
-        std::cout << "Multithread throughput ratio (queue / STLQueue):\n";
+        std::cout << "Multithread throughput ratio (impl / STLQueue):\n";
         for (const auto& [operation, by_impl] : mt_ops) {
-            const auto queue_it = by_impl.find("queue");
             const auto stl_it = by_impl.find("STLQueue");
-            if (queue_it == by_impl.end() || stl_it == by_impl.end() || stl_it->second <= 0.0) {
+            if (stl_it == by_impl.end() || stl_it->second <= 0.0) {
                 continue;
             }
 
-            const double ratio = queue_it->second / stl_it->second;
-            std::cout << "  " << operation << ": " << format_ratio(ratio) << "x (" << "queue "
-                      << format_metric(queue_it->second) << " ops/sec vs STLQueue "
-                      << format_metric(stl_it->second) << " ops/sec)\n";
+            const std::array<std::string_view, 2> impls = {
+                    "queue",
+#if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+                    "BoostQueue",
+#else
+                    "",
+#endif
+            };
+
+            for (const auto impl_name : impls) {
+                if (impl_name.empty()) {
+                    continue;
+                }
+
+                const auto impl_it = by_impl.find(std::string(impl_name));
+                if (impl_it == by_impl.end()) {
+                    continue;
+                }
+
+                const double ratio = impl_it->second / stl_it->second;
+                std::cout << "  " << operation << ": " << impl_name << " " << format_ratio(ratio)
+                          << "x (" << format_metric(impl_it->second) << " ops/sec vs STLQueue "
+                          << format_metric(stl_it->second) << " ops/sec)\n";
+            }
         }
     }
 
@@ -1132,24 +1208,42 @@ int main(int argc, char** argv) {
     using SeraphQueue = seraph::queue<int>;
     using STL = STLQueueAdapter;
     using STLContention = ThreadSafeSTLQueueAdapter;
+#if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+    using BoostQueue = BoostLockfreeQueueAdapter;
+#endif
 
     append_samples(bench_push_copy<SeraphQueue>("queue", iterations, repeats));
     append_samples(bench_push_copy<STL>("STLQueue", iterations, repeats));
+#if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+    append_samples(bench_push_copy<BoostQueue>("BoostQueue", iterations, repeats));
+#endif
 
     append_samples(bench_push_move<SeraphQueue>("queue", iterations, repeats));
     append_samples(bench_push_move<STL>("STLQueue", iterations, repeats));
+#if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+    append_samples(bench_push_move<BoostQueue>("BoostQueue", iterations, repeats));
+#endif
 
     append_samples(bench_emplace<SeraphQueue>("queue", iterations, repeats));
     append_samples(bench_emplace<STL>("STLQueue", iterations, repeats));
+#if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+    append_samples(bench_emplace<BoostQueue>("BoostQueue", iterations, repeats));
+#endif
 
     append_samples(bench_pop<SeraphQueue>("queue", iterations, repeats));
     append_samples(bench_pop<STL>("STLQueue", iterations, repeats));
+#if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+    append_samples(bench_pop<BoostQueue>("BoostQueue", iterations, repeats));
+#endif
 
     append_samples(bench_size<SeraphQueue>("queue", iterations, repeats));
     append_samples(bench_size<STL>("STLQueue", iterations, repeats));
 
     append_samples(bench_empty<SeraphQueue>("queue", iterations, repeats));
     append_samples(bench_empty<STL>("STLQueue", iterations, repeats));
+#if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+    append_samples(bench_empty<BoostQueue>("BoostQueue", iterations, repeats));
+#endif
 
     append_samples(bench_front<SeraphQueue>("queue", iterations, repeats));
     append_samples(bench_front<STL>("STLQueue", iterations, repeats));
@@ -1177,6 +1271,15 @@ int main(int argc, char** argv) {
                     contention_ops_per_thread,
                     repeats
             ));
+#if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+            append_samples(bench_contention_mix<BoostQueue>(
+                    "BoostQueue",
+                    thread_count,
+                    push_percent,
+                    contention_ops_per_thread,
+                    repeats
+            ));
+#endif
         }
     }
 
@@ -1193,6 +1296,14 @@ int main(int argc, char** argv) {
                 specialized_ops_per_thread,
                 repeats
         ));
+#if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+        append_samples(bench_mt_push_only<BoostQueue>(
+                "BoostQueue",
+                thread_count,
+                specialized_ops_per_thread,
+                repeats
+        ));
+#endif
 
         append_samples(bench_mt_pop_only<SeraphQueue>(
                 "queue",
@@ -1206,6 +1317,14 @@ int main(int argc, char** argv) {
                 specialized_ops_per_thread,
                 repeats
         ));
+#if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+        append_samples(bench_mt_pop_only<BoostQueue>(
+                "BoostQueue",
+                thread_count,
+                specialized_ops_per_thread,
+                repeats
+        ));
+#endif
     }
 
     const auto aggregates = build_aggregates(samples);
@@ -1233,6 +1352,9 @@ int main(int argc, char** argv) {
     std::cout << "Graph (ops/sec, averaged): " << ops_svg_path << "\n";
     std::cout << "Graph (contention ops/sec, averaged): " << contention_svg_path << "\n";
     std::cout << "Graph (specialized mt ops/sec, averaged): " << specialized_mt_svg_path << "\n";
+#if !SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+    std::cout << "Boost lockfree queue headers not found; BoostQueue comparison skipped.\n";
+#endif
     std::cout << "Sink: " << g_sink << "\n";
 
     return 0;
