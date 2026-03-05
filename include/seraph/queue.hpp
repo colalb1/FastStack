@@ -12,7 +12,7 @@
 
 namespace seraph {
 
-    template <typename T> class Queue {
+    template <typename T> class queue {
       private:
 #if defined(__cpp_lib_hardware_interference_size)
         static constexpr size_t k_destructive_interference_size{
@@ -152,20 +152,20 @@ namespace seraph {
         std::atomic<std::size_t> size_{0};
 
       public:
-        Queue() {
+        queue() {
             Node* dummy(new Node());
             head_.store(dummy, std::memory_order_relaxed);
             tail_.store(dummy, std::memory_order_relaxed);
         }
 
-        ~Queue() {
+        ~queue() {
             clear_local_hazard_pointers();
             clear_live_nodes();
             clear_local_retired_nodes();
         }
 
-        Queue(const Queue&) = delete;
-        auto operator=(const Queue&) -> Queue& = delete;
+        queue(const queue&) = delete;
+        auto operator=(const queue&) -> queue& = delete;
 
         void push(const T& value) {
             emplace(value);
@@ -375,11 +375,11 @@ namespace seraph {
     };
 
     template <typename T>
-    typename Queue<T>::HazardRecord Queue<T>::hazard_records_[Queue<T>::k_max_hazard_pointers];
+    typename queue<T>::HazardRecord queue<T>::hazard_records_[queue<T>::k_max_hazard_pointers];
     template <typename T>
-    thread_local std::array<typename Queue<T>::HazardRecord*, Queue<T>::k_local_hazard_slots>
-            Queue<T>::local_hazards_{};
-    template <typename T> thread_local typename Queue<T>::HazardReleaser Queue<T>::hazard_releaser_;
-    template <typename T> thread_local std::vector<typename Queue<T>::Node*> Queue<T>::retire_list_;
+    thread_local std::array<typename queue<T>::HazardRecord*, queue<T>::k_local_hazard_slots>
+            queue<T>::local_hazards_{};
+    template <typename T> thread_local typename queue<T>::HazardReleaser queue<T>::hazard_releaser_;
+    template <typename T> thread_local std::vector<typename queue<T>::Node*> queue<T>::retire_list_;
 
 } // namespace seraph
