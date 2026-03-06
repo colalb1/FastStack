@@ -50,6 +50,28 @@ if(SERAPH_BUILD_TESTS)
         tests/stack_performance_test.cpp
     )
     target_link_libraries(seraph_stack_perf PRIVATE seraph::seraph)
+
+    add_executable(seraph_queue_perf
+        tests/queue_performance_test.cpp
+    )
+    target_link_libraries(seraph_queue_perf PRIVATE seraph::seraph)
+
+    find_package(Boost CONFIG QUIET)
+    if(Boost_FOUND)
+        if(TARGET Boost::headers)
+            target_link_libraries(seraph_stack_perf PRIVATE Boost::headers)
+            target_link_libraries(seraph_queue_perf PRIVATE Boost::headers)
+        elseif(TARGET Boost::boost)
+            target_link_libraries(seraph_stack_perf PRIVATE Boost::boost)
+            target_link_libraries(seraph_queue_perf PRIVATE Boost::boost)
+        else()
+            target_include_directories(seraph_stack_perf PRIVATE ${Boost_INCLUDE_DIRS})
+            target_include_directories(seraph_queue_perf PRIVATE ${Boost_INCLUDE_DIRS})
+        endif()
+    elseif(EXISTS "/opt/homebrew/include/boost")
+        target_include_directories(seraph_stack_perf PRIVATE /opt/homebrew/include)
+        target_include_directories(seraph_queue_perf PRIVATE /opt/homebrew/include)
+    endif()
 endif()
 
 if(SERAPH_ENABLE_INSTALL)

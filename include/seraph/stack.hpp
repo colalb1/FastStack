@@ -16,7 +16,7 @@
 #include <vector>
 
 namespace seraph {
-    template <typename T> class Stack {
+    template <typename T> class stack {
       private:
         // Starts in a spinlock-protected vector mode and promotes once to lock-free CAS.
 
@@ -65,7 +65,7 @@ namespace seraph {
 
         class ActiveOperationScope {
           public:
-            explicit ActiveOperationScope(Stack& stack) : stack_(stack) {
+            explicit ActiveOperationScope(stack& stack) : stack_(stack) {
                 const size_t active_now(
                         stack_.active_ops_.fetch_add(1, std::memory_order_relaxed) + 1
                 );
@@ -77,7 +77,7 @@ namespace seraph {
             }
 
           private:
-            Stack& stack_;
+            stack& stack_;
         };
 
         static HazardRecord* acquire_hazard() {
@@ -293,30 +293,30 @@ namespace seraph {
         std::atomic<bool> promotion_requested_{false};
 
       public:
-        Stack()
+        stack()
             : contention_thread_threshold_(k_default_thread_threshold),
               promotion_streak_threshold_(k_default_streak_threshold) {}
 
-        explicit Stack(size_t reserve_hint)
+        explicit stack(size_t reserve_hint)
             : contention_thread_threshold_(k_default_thread_threshold),
               promotion_streak_threshold_(k_default_streak_threshold) {
             spin_data_.reserve(reserve_hint);
         }
 
-        Stack(size_t reserve_hint, size_t contention_thread_threshold, size_t streak_threshold)
+        stack(size_t reserve_hint, size_t contention_thread_threshold, size_t streak_threshold)
             : contention_thread_threshold_(std::max<size_t>(2, contention_thread_threshold)),
               promotion_streak_threshold_(std::max<size_t>(1, streak_threshold)) {
             spin_data_.reserve(reserve_hint);
         }
 
-        ~Stack() {
+        ~stack() {
             if (using_cas_.load(std::memory_order_acquire)) {
                 clear_cas_nodes();
             }
         }
 
-        Stack(const Stack&) = delete;
-        Stack& operator=(const Stack&) = delete;
+        stack(const stack&) = delete;
+        stack& operator=(const stack&) = delete;
 
         void reserve(size_t n) {
             ActiveOperationScope scope(*this);
@@ -439,13 +439,13 @@ namespace seraph {
     };
 
     template <typename T>
-    typename Stack<T>::HazardRecord Stack<T>::hazard_records_[Stack<T>::k_max_hazard_pointers];
+    typename stack<T>::HazardRecord stack<T>::hazard_records_[stack<T>::k_max_hazard_pointers];
 
     template <typename T>
-    thread_local typename Stack<T>::HazardRecord* Stack<T>::local_hazard_ = nullptr;
+    thread_local typename stack<T>::HazardRecord* stack<T>::local_hazard_ = nullptr;
 
-    template <typename T> thread_local typename Stack<T>::HazardReleaser Stack<T>::hazard_releaser_;
+    template <typename T> thread_local typename stack<T>::HazardReleaser stack<T>::hazard_releaser_;
 
-    template <typename T> thread_local std::vector<typename Stack<T>::Node*> Stack<T>::retire_list_;
+    template <typename T> thread_local std::vector<typename stack<T>::Node*> stack<T>::retire_list_;
 
 } // namespace seraph

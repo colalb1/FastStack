@@ -1,10 +1,11 @@
-#include "seraph/stack.hpp"
+#include "seraph/queue.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <barrier>
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -12,8 +13,8 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <queue>
 #include <sstream>
-#include <stack>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -22,14 +23,14 @@
 #include <vector>
 
 #if defined(__has_include)
-#if __has_include(<boost/lockfree/stack.hpp>)
-#include <boost/lockfree/stack.hpp>
-#define SERAPH_HAS_BOOST_LOCKFREE_STACK 1
+#if __has_include(<boost/lockfree/queue.hpp>)
+#include <boost/lockfree/queue.hpp>
+#define SERAPH_HAS_BOOST_LOCKFREE_QUEUE 1
 #endif
 #endif
 
-#ifndef SERAPH_HAS_BOOST_LOCKFREE_STACK
-#define SERAPH_HAS_BOOST_LOCKFREE_STACK 0
+#ifndef SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+#define SERAPH_HAS_BOOST_LOCKFREE_QUEUE 0
 #endif
 
 namespace {
@@ -58,7 +59,7 @@ namespace {
 
     volatile std::uint64_t g_sink = 0;
 
-    class STLStackAdapter {
+    class STLQueueAdapter {
       public:
         void push(const int& value) {
             data_.push(value);
@@ -72,88 +73,109 @@ namespace {
             data_.emplace(std::forward<Args>(args)...);
         }
 
-        std::optional<int> pop() {
+        auto pop() -> std::optional<int> {
             if (data_.empty()) {
                 return std::nullopt;
             }
-            int value = std::move(data_.top());
+
+            int value = std::move(data_.front());
             data_.pop();
             return value;
         }
 
-        std::optional<int> top() const {
+        auto front() const -> std::optional<int> {
             if (data_.empty()) {
                 return std::nullopt;
             }
-            return data_.top();
+
+            return data_.front();
         }
 
-        bool empty() const noexcept {
+        auto back() const -> std::optional<int> {
+            if (data_.empty()) {
+                return std::nullopt;
+            }
+
+            return data_.back();
+        }
+
+        auto empty() const noexcept -> bool {
             return data_.empty();
         }
 
-        std::size_t size() const noexcept {
+        auto size() const noexcept -> std::size_t {
             return data_.size();
         }
 
       private:
-        std::stack<int, std::vector<int>> data_;
+        std::queue<int, std::deque<int>> data_;
     };
 
-    class ThreadSafeSTLStackAdapter {
+    class ThreadSafeSTLQueueAdapter {
       public:
         void push(const int& value) {
-            std::lock_guard<std::mutex> guard(lock_);
+            std::scoped_lock<std::mutex> guard(lock_);
             data_.push(value);
         }
 
         void push(int&& value) {
-            std::lock_guard<std::mutex> guard(lock_);
+            std::scoped_lock<std::mutex> guard(lock_);
             data_.push(std::move(value));
         }
 
         template <typename... Args> void emplace(Args&&... args) {
-            std::lock_guard<std::mutex> guard(lock_);
+            std::scoped_lock<std::mutex> guard(lock_);
             data_.emplace(std::forward<Args>(args)...);
         }
 
-        std::optional<int> pop() {
-            std::lock_guard<std::mutex> guard(lock_);
+        auto pop() -> std::optional<int> {
+            std::scoped_lock<std::mutex> guard(lock_);
             if (data_.empty()) {
                 return std::nullopt;
             }
-            int value = std::move(data_.top());
+
+            int value = std::move(data_.front());
             data_.pop();
             return value;
         }
 
-        std::optional<int> top() const {
-            std::lock_guard<std::mutex> guard(lock_);
+        auto front() const -> std::optional<int> {
+            std::scoped_lock<std::mutex> guard(lock_);
             if (data_.empty()) {
                 return std::nullopt;
             }
-            return data_.top();
+
+            return data_.front();
         }
 
-        bool empty() const noexcept {
-            std::lock_guard<std::mutex> guard(lock_);
+        auto back() const -> std::optional<int> {
+            std::scoped_lock<std::mutex> guard(lock_);
+            if (data_.empty()) {
+                return std::nullopt;
+            }
+
+            return data_.back();
+        }
+
+        auto empty() const noexcept -> bool {
+            std::scoped_lock<std::mutex> guard(lock_);
             return data_.empty();
         }
 
-        std::size_t size() const noexcept {
-            std::lock_guard<std::mutex> guard(lock_);
+        auto size() const noexcept -> std::size_t {
+            std::scoped_lock<std::mutex> guard(lock_);
             return data_.size();
         }
 
       private:
         mutable std::mutex lock_;
-        std::stack<int, std::vector<int>> data_;
+        std::queue<int, std::deque<int>> data_;
     };
 
-#if SERAPH_HAS_BOOST_LOCKFREE_STACK
-    class BoostLockfreeStackAdapter {
+#if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+    class BoostLockfreeQueueAdapter {
       public:
-        BoostLockfreeStackAdapter() : data_(1024) {}
+        BoostLockfreeQueueAdapter() : data_(1024) {}
 
         void push(const int& value) {
             while (!data_.push(value)) {
@@ -174,7 +196,7 @@ namespace {
             push(std::move(value));
         }
 
-        std::optional<int> pop() {
+        auto pop() -> std::optional<int> {
             int value = 0;
             if (!data_.pop(value)) {
                 return std::nullopt;
@@ -183,25 +205,25 @@ namespace {
             return value;
         }
 
-        bool empty() const noexcept {
+        auto empty() const noexcept -> bool {
             return data_.empty();
         }
 
-        std::size_t size() const noexcept {
+        auto size() const noexcept -> std::size_t {
             return size_.load(std::memory_order_relaxed);
         }
 
       private:
-        boost::lockfree::stack<int> data_;
+        boost::lockfree::queue<int> data_;
         std::atomic<std::size_t> size_{0};
     };
 #endif
 
-    std::filesystem::path find_repo_root() {
+    auto find_repo_root() -> std::filesystem::path {
         std::filesystem::path current = std::filesystem::current_path();
 
         while (!current.empty()) {
-            const auto marker = current / "include" / "seraph" / "stack.hpp";
+            const auto marker = current / "include" / "seraph" / "queue.hpp";
             const auto cmake = current / "CMakeLists.txt";
             if (std::filesystem::exists(marker) && std::filesystem::exists(cmake)) {
                 return current;
@@ -217,13 +239,13 @@ namespace {
     }
 
     template <typename Fn>
-    std::vector<BenchmarkSample> run_samples(
+    auto run_samples(
             std::string_view impl_name,
             std::string_view operation,
             std::size_t iterations,
             int repeats,
             Fn&& fn
-    ) {
+    ) -> std::vector<BenchmarkSample> {
         std::vector<BenchmarkSample> samples;
         samples.reserve(static_cast<std::size_t>(repeats));
 
@@ -251,56 +273,57 @@ namespace {
         return samples;
     }
 
-    template <typename StackType>
-    std::vector<BenchmarkSample>
-    bench_push_copy(std::string_view impl_name, std::size_t iterations, int repeats) {
+    template <typename QueueType>
+    auto bench_push_copy(std::string_view impl_name, std::size_t iterations, int repeats)
+            -> std::vector<BenchmarkSample> {
         return run_samples(impl_name, "push_copy", iterations, repeats, [iterations]() {
-            StackType stack;
+            QueueType queue;
             const int value = 42;
+
             for (std::size_t iii = 0; iii < iterations; ++iii) {
-                stack.push(value);
+                queue.push(value);
             }
-            g_sink += stack.size();
+            g_sink += queue.size();
         });
     }
 
-    template <typename StackType>
-    std::vector<BenchmarkSample>
-    bench_push_move(std::string_view impl_name, std::size_t iterations, int repeats) {
+    template <typename QueueType>
+    auto bench_push_move(std::string_view impl_name, std::size_t iterations, int repeats)
+            -> std::vector<BenchmarkSample> {
         return run_samples(impl_name, "push_move", iterations, repeats, [iterations]() {
-            StackType stack;
+            QueueType queue;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
                 int value = static_cast<int>(iii);
-                stack.push(std::move(value));
+                queue.push(std::move(value));
             }
-            g_sink += stack.size();
+            g_sink += queue.size();
         });
     }
 
-    template <typename StackType>
-    std::vector<BenchmarkSample>
-    bench_emplace(std::string_view impl_name, std::size_t iterations, int repeats) {
+    template <typename QueueType>
+    auto bench_emplace(std::string_view impl_name, std::size_t iterations, int repeats)
+            -> std::vector<BenchmarkSample> {
         return run_samples(impl_name, "emplace", iterations, repeats, [iterations]() {
-            StackType stack;
+            QueueType queue;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
-                stack.emplace(static_cast<int>(iii));
+                queue.emplace(static_cast<int>(iii));
             }
-            g_sink += stack.size();
+            g_sink += queue.size();
         });
     }
 
-    template <typename StackType>
-    std::vector<BenchmarkSample>
-    bench_pop(std::string_view impl_name, std::size_t iterations, int repeats) {
+    template <typename QueueType>
+    auto bench_pop(std::string_view impl_name, std::size_t iterations, int repeats)
+            -> std::vector<BenchmarkSample> {
         return run_samples(impl_name, "pop", iterations, repeats, [iterations]() {
-            StackType stack;
+            QueueType queue;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
-                stack.emplace(static_cast<int>(iii));
+                queue.emplace(static_cast<int>(iii));
             }
 
             std::uint64_t local_sum = 0;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
-                auto value = stack.pop();
+                auto value = queue.pop();
                 if (value.has_value()) {
                     local_sum += static_cast<std::uint64_t>(*value);
                 }
@@ -309,91 +332,102 @@ namespace {
         });
     }
 
-    template <typename StackType>
-    std::vector<BenchmarkSample>
-    bench_size(std::string_view impl_name, std::size_t iterations, int repeats) {
+    template <typename QueueType>
+    auto bench_front(std::string_view impl_name, std::size_t iterations, int repeats)
+            -> std::vector<BenchmarkSample> {
+        return run_samples(impl_name, "front", iterations, repeats, [iterations]() {
+            QueueType queue;
+            queue.emplace(7);
+
+            std::uint64_t local_sum = 0;
+            for (std::size_t iii = 0; iii < iterations; ++iii) {
+                auto value = queue.front();
+                if (value.has_value()) {
+                    local_sum += static_cast<std::uint64_t>(*value);
+                }
+            }
+            g_sink += local_sum;
+        });
+    }
+
+    template <typename QueueType>
+    auto bench_back(std::string_view impl_name, std::size_t iterations, int repeats)
+            -> std::vector<BenchmarkSample> {
+        return run_samples(impl_name, "back", iterations, repeats, [iterations]() {
+            QueueType queue;
+            queue.emplace(11);
+
+            std::uint64_t local_sum = 0;
+            for (std::size_t iii = 0; iii < iterations; ++iii) {
+                auto value = queue.back();
+                if (value.has_value()) {
+                    local_sum += static_cast<std::uint64_t>(*value);
+                }
+            }
+            g_sink += local_sum;
+        });
+    }
+
+    template <typename QueueType>
+    auto bench_size(std::string_view impl_name, std::size_t iterations, int repeats)
+            -> std::vector<BenchmarkSample> {
         return run_samples(impl_name, "size", iterations, repeats, [iterations]() {
-            StackType stack;
+            QueueType queue;
             for (std::size_t iii = 0; iii < 1024; ++iii) {
-                stack.emplace(static_cast<int>(iii));
+                queue.emplace(static_cast<int>(iii));
             }
 
             std::uint64_t local_sum = 0;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
-                local_sum += stack.size();
+                local_sum += queue.size();
             }
             g_sink += local_sum;
         });
     }
 
-    template <typename StackType>
-    std::vector<BenchmarkSample>
-    bench_empty(std::string_view impl_name, std::size_t iterations, int repeats) {
+    template <typename QueueType>
+    auto bench_empty(std::string_view impl_name, std::size_t iterations, int repeats)
+            -> std::vector<BenchmarkSample> {
         return run_samples(impl_name, "empty", iterations, repeats, [iterations]() {
-            StackType stack;
-            stack.emplace(1);
+            QueueType queue;
+            queue.emplace(1);
+
             std::uint64_t local_sum = 0;
             for (std::size_t iii = 0; iii < iterations; ++iii) {
-                local_sum += static_cast<std::uint64_t>(stack.empty());
+                local_sum += static_cast<std::uint64_t>(queue.empty());
             }
             g_sink += local_sum;
         });
     }
 
-    template <typename StackType>
-    std::vector<BenchmarkSample>
-    bench_top(std::string_view impl_name, std::size_t iterations, int repeats) {
-        return run_samples(impl_name, "top", iterations, repeats, [iterations]() {
-            StackType stack;
-            stack.emplace(7);
-            std::uint64_t local_sum = 0;
-            for (std::size_t iii = 0; iii < iterations; ++iii) {
-                auto value = stack.top();
-                if (value.has_value()) {
-                    local_sum += static_cast<std::uint64_t>(*value);
-                }
-            }
-            g_sink += local_sum;
-        });
-    }
-
-    std::vector<BenchmarkSample> bench_reserve_stack(std::size_t iterations, int repeats) {
-        return run_samples("stack", "reserve", iterations, repeats, [iterations]() {
-            seraph::stack<int> stack;
-            for (std::size_t iii = 1; iii <= iterations; ++iii) {
-                stack.reserve(iii);
-            }
-            g_sink += stack.size();
-        });
-    }
-
-    std::string make_contention_operation_label(int thread_count, int push_percent) {
+    auto make_contention_operation_label(int thread_count, int push_percent) -> std::string {
         const int pop_percent = 100 - push_percent;
         return "contention_t" + std::to_string(thread_count) + "_push" +
                std::to_string(push_percent) + "_pop" + std::to_string(pop_percent);
     }
 
-    template <typename StackType>
-    std::vector<BenchmarkSample> bench_contention_mix(
+    template <typename QueueType>
+    auto bench_contention_mix(
             std::string_view impl_name,
             int thread_count,
             int push_percent,
             std::size_t ops_per_thread,
             int repeats
-    ) {
+    ) -> std::vector<BenchmarkSample> {
         const std::size_t total_ops = static_cast<std::size_t>(thread_count) * ops_per_thread;
         const std::string op_label = make_contention_operation_label(thread_count, push_percent);
+
         return run_samples(
                 impl_name,
                 op_label,
                 total_ops,
                 repeats,
                 [thread_count, push_percent, ops_per_thread]() {
-                    StackType stack;
+                    QueueType queue;
                     for (std::size_t iii = 0;
                          iii < static_cast<std::size_t>(thread_count) * ops_per_thread;
                          ++iii) {
-                        stack.emplace(static_cast<int>(iii));
+                        queue.emplace(static_cast<int>(iii));
                     }
 
                     std::barrier sync_start(thread_count + 1);
@@ -416,12 +450,12 @@ namespace {
 
                                 const int roll = static_cast<int>(seed % 100ULL);
                                 if (roll < push_percent) {
-                                    stack.push(static_cast<int>(
+                                    queue.push(static_cast<int>(
                                             iii ^ static_cast<std::size_t>(thread_index)
                                     ));
                                 }
                                 else {
-                                    auto value = stack.pop();
+                                    auto value = queue.pop();
                                     if (value.has_value()) {
                                         local_sum += static_cast<std::uint64_t>(*value);
                                     }
@@ -433,7 +467,6 @@ namespace {
                     }
 
                     sync_start.arrive_and_wait();
-
                     for (auto& worker : workers) {
                         worker.join();
                     }
@@ -443,26 +476,27 @@ namespace {
         );
     }
 
-    std::string make_mt_simple_operation_label(std::string_view mode, int thread_count) {
+    auto make_mt_simple_operation_label(std::string_view mode, int thread_count) -> std::string {
         return "mt_" + std::string(mode) + "_t" + std::to_string(thread_count);
     }
 
-    template <typename StackType>
-    std::vector<BenchmarkSample> bench_mt_push_only(
+    template <typename QueueType>
+    auto bench_mt_push_only(
             std::string_view impl_name,
             int thread_count,
             std::size_t ops_per_thread,
             int repeats
-    ) {
+    ) -> std::vector<BenchmarkSample> {
         const std::size_t total_ops = static_cast<std::size_t>(thread_count) * ops_per_thread;
         const std::string op_label = make_mt_simple_operation_label("push_only", thread_count);
+
         return run_samples(
                 impl_name,
                 op_label,
                 total_ops,
                 repeats,
                 [thread_count, ops_per_thread]() {
-                    StackType stack;
+                    QueueType queue;
                     std::barrier sync_start(thread_count + 1);
                     std::vector<std::thread> workers;
                     workers.reserve(static_cast<std::size_t>(thread_count));
@@ -471,7 +505,7 @@ namespace {
                         workers.emplace_back([&, thread_index]() {
                             sync_start.arrive_and_wait();
                             for (std::size_t iii = 0; iii < ops_per_thread; ++iii) {
-                                stack.push(static_cast<int>(
+                                queue.push(static_cast<int>(
                                         iii + static_cast<std::size_t>(thread_index)
                                 ));
                             }
@@ -482,29 +516,31 @@ namespace {
                     for (auto& worker : workers) {
                         worker.join();
                     }
-                    g_sink += stack.size();
+
+                    g_sink += queue.size();
                 }
         );
     }
 
-    template <typename StackType>
-    std::vector<BenchmarkSample> bench_mt_pop_only(
+    template <typename QueueType>
+    auto bench_mt_pop_only(
             std::string_view impl_name,
             int thread_count,
             std::size_t ops_per_thread,
             int repeats
-    ) {
+    ) -> std::vector<BenchmarkSample> {
         const std::size_t total_ops = static_cast<std::size_t>(thread_count) * ops_per_thread;
         const std::string op_label = make_mt_simple_operation_label("pop_only", thread_count);
+
         return run_samples(
                 impl_name,
                 op_label,
                 total_ops,
                 repeats,
                 [thread_count, ops_per_thread, total_ops]() {
-                    StackType stack;
+                    QueueType queue;
                     for (std::size_t iii = 0; iii < total_ops; ++iii) {
-                        stack.emplace(static_cast<int>(iii));
+                        queue.emplace(static_cast<int>(iii));
                     }
 
                     std::barrier sync_start(thread_count + 1);
@@ -517,7 +553,7 @@ namespace {
                             std::uint64_t local_sum = 0;
                             sync_start.arrive_and_wait();
                             for (std::size_t iii = 0; iii < ops_per_thread; ++iii) {
-                                auto value = stack.pop();
+                                auto value = queue.pop();
                                 if (value.has_value()) {
                                     local_sum += static_cast<std::uint64_t>(*value);
                                 }
@@ -530,12 +566,14 @@ namespace {
                     for (auto& worker : workers) {
                         worker.join();
                     }
+
                     g_sink += pop_sum.load(std::memory_order_relaxed);
                 }
         );
     }
 
-    std::vector<BenchmarkAggregate> build_aggregates(const std::vector<BenchmarkSample>& samples) {
+    auto build_aggregates(const std::vector<BenchmarkSample>& samples
+    ) -> std::vector<BenchmarkAggregate> {
         std::vector<BenchmarkAggregate> aggregates;
         std::map<std::pair<std::string, std::string>, std::vector<const BenchmarkSample*>> grouped;
 
@@ -601,19 +639,25 @@ namespace {
         }
     }
 
-    std::string color_for_impl(std::string_view impl) {
-        if (impl == "stack") {
+    auto color_for_impl(std::string_view impl) -> std::string {
+        if (impl == "queue") {
             return "#2a9d8f";
         }
-        if (impl == "BoostStack") {
+        if (impl == "BoostQueue") {
             return "#e76f51";
         }
         return "#264653";
     }
 
-    std::string format_metric(double value) {
+    auto format_metric(double value) -> std::string {
         std::ostringstream ss;
         ss << std::fixed << std::setprecision(value >= 100.0 ? 1 : 2) << value;
+        return ss.str();
+    }
+
+    auto format_ratio(double value) -> std::string {
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(2) << value;
         return ss.str();
     }
 
@@ -630,9 +674,9 @@ namespace {
             }
         }
 
-        std::vector<std::string> impls = {"stack"};
-#if SERAPH_HAS_BOOST_LOCKFREE_STACK
-        impls.push_back("BoostStack");
+        std::vector<std::string> impls = {"queue"};
+#if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+        impls.push_back("BoostQueue");
 #endif
 
         std::map<std::string, std::map<std::string, double>> metric_by_op_impl;
@@ -662,7 +706,7 @@ namespace {
             << "\" fill=\"#ffffff\"/>\n";
         out << "<text x=\"" << width / 2
             << "\" y=\"40\" text-anchor=\"middle\" font-size=\"26\" font-family=\"Menlo, "
-               "monospace\" fill=\"#111111\">stack Performance Average: "
+               "monospace\" fill=\"#111111\">queue Performance Average: "
             << (use_ns_metric ? "ns/op (lower is better)" : "ops/sec (higher is better)")
             << "</text>\n";
         out << "<text x=\"28\" y=\"" << (margin_top + plot_h / 2.0)
@@ -788,7 +832,7 @@ namespace {
         return true;
     }
 
-    std::string color_for_series_index(std::size_t index) {
+    auto color_for_series_index(std::size_t index) -> std::string {
         static const std::vector<std::string> palette = {
                 "#1d3557",
                 "#e76f51",
@@ -860,7 +904,7 @@ namespace {
         out << "<text x=\"" << width / 2
             << "\" y=\"40\" text-anchor=\"middle\" font-size=\"26\" font-family=\"Menlo, "
                "monospace\" "
-               "fill=\"#111111\">Multithreaded Contention Throughput (average ops/sec)</text>\n";
+               "fill=\"#111111\">queue Contention Throughput (average ops/sec)</text>\n";
 
         for (int tick = 0; tick <= 5; ++tick) {
             const double ratio = static_cast<double>(tick) / 5.0;
@@ -1002,7 +1046,8 @@ namespace {
         out << "<text x=\"" << width / 2
             << "\" y=\"40\" text-anchor=\"middle\" font-size=\"26\" font-family=\"Menlo, "
                "monospace\" "
-               "fill=\"#111111\">Multithreaded Specialized Throughput (average ops/sec)</text>\n";
+               "fill=\"#111111\">queue Specialized Multithread Throughput (average ops/sec)</text>"
+            << "\n";
         out << "<text x=\"28\" y=\"" << (margin_top + plot_h / 2.0)
             << "\" text-anchor=\"middle\" font-size=\"13\" font-family=\"Menlo, monospace\" "
                "fill=\"#222222\" transform=\"rotate(-90 28 "
@@ -1079,6 +1124,31 @@ namespace {
         out << "</svg>\n";
     }
 
+    void print_mt_comparison_summary(const std::vector<BenchmarkAggregate>& aggregates) {
+        std::map<std::string, std::map<std::string, double>> mt_ops;
+        for (const auto& aggregate : aggregates) {
+            if (!aggregate.operation.starts_with("contention_") &&
+                !aggregate.operation.starts_with("mt_")) {
+                continue;
+            }
+            mt_ops[aggregate.operation][aggregate.implementation] = aggregate.avg_ops_per_second;
+        }
+
+        std::cout << "Multithread throughput ratio (queue / BoostQueue):\n";
+        for (const auto& [operation, by_impl] : mt_ops) {
+            const auto queue_it = by_impl.find("queue");
+            const auto boost_it = by_impl.find("BoostQueue");
+            if (queue_it == by_impl.end() || boost_it == by_impl.end() || boost_it->second <= 0.0) {
+                continue;
+            }
+
+            const double ratio = queue_it->second / boost_it->second;
+            std::cout << "  " << operation << ": " << format_ratio(ratio) << "x (queue "
+                      << format_metric(queue_it->second) << " ops/sec vs BoostQueue "
+                      << format_metric(boost_it->second) << " ops/sec)\n";
+        }
+    }
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1106,8 +1176,8 @@ int main(int argc, char** argv) {
 
     const std::size_t iterations = quick ? 20'000 : 300'000;
     const int repeats = quick ? 2 : 5;
-    const std::size_t contention_ops_per_thread = quick ? 10'000 : 100'000;
-    const std::size_t specialized_ops_per_thread = quick ? 15'000 : 150'000;
+    const std::size_t contention_ops_per_thread = quick ? 10'000 : 120'000;
+    const std::size_t specialized_ops_per_thread = quick ? 15'000 : 200'000;
 
     std::vector<BenchmarkSample> samples;
     samples.reserve(256);
@@ -1120,38 +1190,40 @@ int main(int argc, char** argv) {
         );
     };
 
-    using SeraphStack = seraph::stack<int>;
-#if SERAPH_HAS_BOOST_LOCKFREE_STACK
-    using BoostStack = BoostLockfreeStackAdapter;
+    using SeraphQueue = seraph::queue<int>;
+#if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
+    using BoostQueue = BoostLockfreeQueueAdapter;
 
-    append_samples(bench_push_copy<SeraphStack>("stack", iterations, repeats));
-    append_samples(bench_push_copy<BoostStack>("BoostStack", iterations, repeats));
+    append_samples(bench_push_copy<SeraphQueue>("queue", iterations, repeats));
+    append_samples(bench_push_copy<BoostQueue>("BoostQueue", iterations, repeats));
 
-    append_samples(bench_push_move<SeraphStack>("stack", iterations, repeats));
-    append_samples(bench_push_move<BoostStack>("BoostStack", iterations, repeats));
+    append_samples(bench_push_move<SeraphQueue>("queue", iterations, repeats));
+    append_samples(bench_push_move<BoostQueue>("BoostQueue", iterations, repeats));
 
-    append_samples(bench_emplace<SeraphStack>("stack", iterations, repeats));
-    append_samples(bench_emplace<BoostStack>("BoostStack", iterations, repeats));
+    append_samples(bench_emplace<SeraphQueue>("queue", iterations, repeats));
+    append_samples(bench_emplace<BoostQueue>("BoostQueue", iterations, repeats));
 
-    append_samples(bench_pop<SeraphStack>("stack", iterations, repeats));
-    append_samples(bench_pop<BoostStack>("BoostStack", iterations, repeats));
+    append_samples(bench_pop<SeraphQueue>("queue", iterations, repeats));
+    append_samples(bench_pop<BoostQueue>("BoostQueue", iterations, repeats));
 
-    append_samples(bench_empty<SeraphStack>("stack", iterations, repeats));
-    append_samples(bench_empty<BoostStack>("BoostStack", iterations, repeats));
+    append_samples(bench_empty<SeraphQueue>("queue", iterations, repeats));
+    append_samples(bench_empty<BoostQueue>("BoostQueue", iterations, repeats));
 
+    // queue pop/front/back can consume two hazard slots per thread; keep thread counts
+    // bounded for reliable runs across debug/release builds.
     const std::vector<int> contention_threads = {2, 4, 8};
     const std::vector<int> push_percents = {10, 20, 50, 80, 100};
     for (const int thread_count : contention_threads) {
         for (const int push_percent : push_percents) {
-            append_samples(bench_contention_mix<SeraphStack>(
-                    "stack",
+            append_samples(bench_contention_mix<SeraphQueue>(
+                    "queue",
                     thread_count,
                     push_percent,
                     contention_ops_per_thread,
                     repeats
             ));
-            append_samples(bench_contention_mix<BoostStack>(
-                    "BoostStack",
+            append_samples(bench_contention_mix<BoostQueue>(
+                    "BoostQueue",
                     thread_count,
                     push_percent,
                     contention_ops_per_thread,
@@ -1161,34 +1233,34 @@ int main(int argc, char** argv) {
     }
 
     for (const int thread_count : contention_threads) {
-        append_samples(bench_mt_push_only<SeraphStack>(
-                "stack",
+        append_samples(bench_mt_push_only<SeraphQueue>(
+                "queue",
                 thread_count,
                 specialized_ops_per_thread,
                 repeats
         ));
-        append_samples(bench_mt_push_only<BoostStack>(
-                "BoostStack",
+        append_samples(bench_mt_push_only<BoostQueue>(
+                "BoostQueue",
                 thread_count,
                 specialized_ops_per_thread,
                 repeats
         ));
 
-        append_samples(bench_mt_pop_only<SeraphStack>(
-                "stack",
+        append_samples(bench_mt_pop_only<SeraphQueue>(
+                "queue",
                 thread_count,
                 specialized_ops_per_thread,
                 repeats
         ));
-        append_samples(bench_mt_pop_only<BoostStack>(
-                "BoostStack",
+        append_samples(bench_mt_pop_only<BoostQueue>(
+                "BoostQueue",
                 thread_count,
                 specialized_ops_per_thread,
                 repeats
         ));
     }
 #else
-    std::cerr << "Boost lockfree stack headers not found; cannot run Boost-only comparison.\n";
+    std::cerr << "Boost lockfree queue headers not found; cannot run Boost-only comparison.\n";
     return 3;
 #endif
 
@@ -1198,19 +1270,20 @@ int main(int argc, char** argv) {
     const auto output_dir = repo_root / "tests" / "perf_results";
     std::filesystem::create_directories(output_dir);
 
-    const auto csv_path = output_dir / "stack_benchmark_results.csv";
-    const auto ns_svg_path = output_dir / "stack_ns_per_op.svg";
-    const auto ops_svg_path = output_dir / "stack_ops_per_sec.svg";
-    const auto contention_svg_path = output_dir / "stack_contention_ops_per_sec.svg";
-    const auto specialized_mt_svg_path = output_dir / "stack_specialized_mt_ops_per_sec.svg";
+    const auto csv_path = output_dir / "queue_benchmark_results.csv";
+    const auto ns_svg_path = output_dir / "queue_ns_per_op.svg";
+    const auto ops_svg_path = output_dir / "queue_ops_per_sec.svg";
+    const auto contention_svg_path = output_dir / "queue_contention_ops_per_sec.svg";
+    const auto specialized_mt_svg_path = output_dir / "queue_specialized_mt_ops_per_sec.svg";
 
     write_results_csv(samples, aggregates, repeats, csv_path);
     write_svg_grouped_bars(aggregates, ns_svg_path, true);
     write_svg_grouped_bars(aggregates, ops_svg_path, false);
     write_contention_svg(aggregates, contention_svg_path);
     write_mt_specialized_svg(aggregates, specialized_mt_svg_path);
+    print_mt_comparison_summary(aggregates);
 
-    std::cout << "stack performance benchmark complete.\n";
+    std::cout << "queue performance benchmark complete.\n";
     std::cout << "Results CSV: " << csv_path << "\n";
     std::cout << "Graph (ns/op, averaged): " << ns_svg_path << "\n";
     std::cout << "Graph (ops/sec, averaged): " << ops_svg_path << "\n";
