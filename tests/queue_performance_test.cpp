@@ -1215,8 +1215,8 @@ int main(int argc, char** argv) {
 
     // queue pop/front/back can consume two hazard slots per thread; keep thread counts
     // bounded for reliable runs across debug/release builds.
-    const std::vector<int> contention_threads = {2, 4, 8};
-    const std::vector<int> push_percents = {50, 80, 20};
+    const std::vector<int> contention_threads = {4};
+    const std::vector<int> push_percents = {10, 20, 50, 80, 100};
     for (const int thread_count : contention_threads) {
         for (const int push_percent : push_percents) {
             append_samples(bench_contention_mix<SeraphQueue>(
