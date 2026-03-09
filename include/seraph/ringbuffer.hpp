@@ -17,19 +17,20 @@
 namespace seraph {
     template <typename T> class RingBuffer {
       private:
-        static constexpr std::size_t k_destructive_interference_size{
+        static constexpr size_t k_destructive_interference_size{
                 std::hardware_destructive_interference_size
         };
-        static constexpr std::size_t k_backoff_batch{32};
+        static constexpr size_t k_backoff_batch{32};
+        static_assert((k_backoff_batch & (k_backoff_batch - 1)) == 0);
 
         struct Slot {
-            std::atomic<std::size_t> sequence{0};
+            std::atomic<size_t> sequence{0};
             mutable std::atomic<std::uint32_t> readers{0};
             std::optional<T> value{};
         };
 
         struct alignas(k_destructive_interference_size) Cursor {
-            std::atomic<std::size_t> value{0};
+            std::atomic<size_t> value{0};
         };
 
         struct ReaderGuard {
@@ -42,7 +43,7 @@ namespace seraph {
             }
         };
 
-        static void batched_backoff(std::size_t& spins) noexcept {
+        static void cpu_relax_or_yield(size_t& spins) noexcept {
             ++spins;
 
             if ((spins & (k_backoff_batch - 1)) == 0) {
@@ -53,74 +54,82 @@ namespace seraph {
             }
         }
 
-        [[nodiscard]] static auto normalize_capacity(std::size_t requested) -> std::size_t {
+        [[nodiscard]] static size_t normalize_capacity(size_t requested) {
             if (requested == 0) {
                 throw std::invalid_argument("RingBuffer capacity must be > 0.");
             }
 
-            const std::size_t capacity(std::bit_ceil(requested));
+            const size_t capacity(std::bit_ceil(requested));
 
-            if (capacity > (std::numeric_limits<std::size_t>::max() >> 1)) {
+            if (capacity > (std::numeric_limits<size_t>::max() >> 1)) {
                 throw std::length_error("RingBuffer capacity is too large.");
             }
 
             return capacity;
         }
 
-        [[nodiscard]] auto slot_for(std::size_t position) noexcept -> Slot& {
-            // Index computation is logically equivalent to `index = position % capacity_`
-            // since `capacity_mask_` follows this expression: `2^{n} - 1`.
-            // Bitmasking is used rather than modulus computation as it is MUCH faster.
+        [[nodiscard]] inline Slot& slot_for(size_t position) noexcept {
+            // With power-of-two capacity, masking is equivalent to modulo.
             return slots_[position & capacity_mask_];
         }
 
-        [[nodiscard]] auto slot_for(std::size_t position) const noexcept -> const Slot& {
+        [[nodiscard]] inline const Slot& slot_for(size_t position) const noexcept {
             return slots_[position & capacity_mask_];
         }
 
-        [[nodiscard]] auto mirrored_slot_for(std::size_t mirrored_position
-        ) const noexcept -> const Slot& {
+        [[nodiscard]] inline const Slot& mirrored_slot_for(size_t mirrored_position
+        ) const noexcept {
             return *(mirrored_slots_[mirrored_position & mirrored_mask_]);
         }
 
-        [[nodiscard]] auto reserve_enqueue_position() noexcept -> std::size_t {
-            std::size_t position(enqueue_pos_.value.load(std::memory_order_relaxed));
-            std::size_t spins{0};
+        [[nodiscard]] inline static bool
+        slot_ready_for_enqueue(size_t sequence, size_t position) noexcept {
+            return sequence == position;
+        }
+
+        [[nodiscard]] inline bool try_claim_enqueue_position(size_t& position) noexcept {
+            return enqueue_pos_.value.compare_exchange_weak(
+                    position,
+                    position + 1,
+                    std::memory_order_relaxed,
+                    std::memory_order_relaxed
+            );
+        }
+
+        inline void refresh_enqueue_position(size_t& position) const noexcept {
+            position = enqueue_pos_.value.load(std::memory_order_relaxed);
+        }
+
+        [[nodiscard]] size_t reserve_enqueue_position() noexcept {
+            size_t position(enqueue_pos_.value.load(std::memory_order_relaxed));
+            size_t spins{0};
 
             while (true) {
                 Slot& slot(slot_for(position));
-                const std::size_t sequence(slot.sequence.load(std::memory_order_acquire));
-                const std::ptrdiff_t diff(
-                        static_cast<std::ptrdiff_t>(sequence) -
-                        static_cast<std::ptrdiff_t>(position)
-                );
+                const size_t sequence(slot.sequence.load(std::memory_order_acquire));
 
-                if (diff == 0) {
-                    if (enqueue_pos_.value.compare_exchange_weak(
-                                position,
-                                position + 1,
-                                std::memory_order_relaxed,
-                                std::memory_order_relaxed
-                        )) {
+                if (slot_ready_for_enqueue(sequence, position)) {
+                    if (try_claim_enqueue_position(position)) {
                         return position;
                     }
 
                     continue;
                 }
 
-                batched_backoff(spins);
-                position = enqueue_pos_.value.load(std::memory_order_relaxed);
+                cpu_relax_or_yield(spins);
+                refresh_enqueue_position(position);
             }
         }
 
-        void publish_enqueue(std::size_t position, Slot& slot) noexcept {
+        void publish_enqueue(size_t position, Slot& slot) noexcept {
+            // `position + 1`: payload is now visible and eligible for pop/front/back.
             slot.sequence.store(position + 1, std::memory_order_release);
             size_.value.fetch_add(1, std::memory_order_relaxed);
         }
 
-        [[nodiscard]] auto try_copy_slot_value(const Slot& slot, std::size_t expected_sequence)
-                const -> std::optional<T> {
-            std::size_t retries{0};
+        [[nodiscard]] std::optional<T>
+        try_copy_slot_value(const Slot& slot, size_t expected_sequence) const {
+            size_t retries{0};
 
             while (true) {
                 if (slot.sequence.load(std::memory_order_acquire) != expected_sequence) {
@@ -142,13 +151,13 @@ namespace seraph {
                     return std::nullopt;
                 }
 
-                batched_backoff(retries);
+                cpu_relax_or_yield(retries);
             }
         }
 
-        std::size_t capacity_{0};
-        std::size_t capacity_mask_{0};
-        std::size_t mirrored_mask_{0};
+        size_t capacity_{0};
+        size_t capacity_mask_{0};
+        size_t mirrored_mask_{0};
         std::vector<Slot> slots_{};
         std::vector<Slot*> mirrored_slots_{};
 
@@ -157,12 +166,12 @@ namespace seraph {
         Cursor size_{};
 
       public:
-        explicit RingBuffer(std::size_t data_size)
+        explicit RingBuffer(size_t data_size)
             : capacity_(normalize_capacity(data_size)), capacity_mask_(capacity_ - 1),
               mirrored_mask_((capacity_ << 1) - 1), slots_(capacity_),
               mirrored_slots_(capacity_ << 1) {
 
-            for (std::size_t iii{0}; iii < capacity_; ++iii) {
+            for (size_t iii{0}; iii < capacity_; ++iii) {
                 slots_[iii].sequence.store(iii, std::memory_order_relaxed);
                 mirrored_slots_[iii] = &slots_[iii];
                 mirrored_slots_[iii + capacity_] = &slots_[iii];
@@ -172,9 +181,9 @@ namespace seraph {
         ~RingBuffer() = default;
 
         RingBuffer(const RingBuffer&) = delete;
-        auto operator=(const RingBuffer&) -> RingBuffer& = delete;
+        RingBuffer& operator=(const RingBuffer&) = delete;
         RingBuffer(RingBuffer&&) = delete;
-        auto operator=(RingBuffer&&) -> RingBuffer& = delete;
+        RingBuffer& operator=(RingBuffer&&) = delete;
 
         void push(const T& value) {
             emplace(value);
@@ -186,7 +195,7 @@ namespace seraph {
 
         template <typename... Args> void emplace(Args&&... args) {
             if constexpr (std::is_nothrow_constructible_v<T, Args&&...>) {
-                const std::size_t position(reserve_enqueue_position());
+                const size_t position(reserve_enqueue_position());
                 Slot& slot(slot_for(position));
                 slot.value.emplace(std::forward<Args>(args)...);
                 publish_enqueue(position, slot);
@@ -194,19 +203,21 @@ namespace seraph {
             }
 
             T staged(std::forward<Args>(args)...);
-            const std::size_t position(reserve_enqueue_position());
+
+            const size_t position(reserve_enqueue_position());
             Slot& slot(slot_for(position));
+
             slot.value.emplace(std::move(staged));
             publish_enqueue(position, slot);
         }
 
-        [[nodiscard]] auto pop() -> std::optional<T> {
-            std::size_t position(dequeue_pos_.value.load(std::memory_order_relaxed));
-            std::size_t spins{0};
+        [[nodiscard]] std::optional<T> pop() {
+            size_t position(dequeue_pos_.value.load(std::memory_order_relaxed));
+            size_t spins{0};
 
             while (true) {
                 Slot& slot(slot_for(position));
-                const std::size_t sequence(slot.sequence.load(std::memory_order_acquire));
+                const size_t sequence(slot.sequence.load(std::memory_order_acquire));
                 const std::ptrdiff_t diff(
                         static_cast<std::ptrdiff_t>(sequence) -
                         static_cast<std::ptrdiff_t>(position + 1)
@@ -220,11 +231,12 @@ namespace seraph {
                                 std::memory_order_relaxed
                         )) {
                         // Block peeks on this slot while payload is being moved/reset.
+                        // `position + (capacity_ << 1)`: transient busy state during pop.
                         slot.sequence.store(position + (capacity_ << 1), std::memory_order_release);
 
-                        std::size_t reader_spins{0};
+                        size_t reader_spins{0};
                         while (slot.readers.load(std::memory_order_acquire) != 0) {
-                            batched_backoff(reader_spins);
+                            cpu_relax_or_yield(reader_spins);
                         }
 
                         std::optional<T> result;
@@ -233,6 +245,7 @@ namespace seraph {
                             slot.value.reset();
                         }
 
+                        // `position + capacity_`: slot recycled and free for next enqueue cycle.
                         slot.sequence.store(position + capacity_, std::memory_order_release);
                         size_.value.fetch_sub(1, std::memory_order_relaxed);
 
@@ -246,14 +259,14 @@ namespace seraph {
                     return std::nullopt;
                 }
 
-                batched_backoff(spins);
+                cpu_relax_or_yield(spins);
                 position = dequeue_pos_.value.load(std::memory_order_relaxed);
             }
         }
 
-        [[nodiscard]] auto front() const -> std::optional<T> {
-            const std::size_t head(dequeue_pos_.value.load(std::memory_order_acquire));
-            const std::size_t tail(enqueue_pos_.value.load(std::memory_order_acquire));
+        [[nodiscard]] std::optional<T> front() const {
+            const size_t head(dequeue_pos_.value.load(std::memory_order_acquire));
+            const size_t tail(enqueue_pos_.value.load(std::memory_order_acquire));
 
             if (head >= tail) {
                 return std::nullopt;
@@ -263,22 +276,22 @@ namespace seraph {
             return try_copy_slot_value(slot, head + 1);
         }
 
-        [[nodiscard]] auto back() const -> std::optional<T> {
-            const std::size_t head(dequeue_pos_.value.load(std::memory_order_acquire));
-            const std::size_t tail(enqueue_pos_.value.load(std::memory_order_acquire));
+        [[nodiscard]] std::optional<T> back() const {
+            const size_t head(dequeue_pos_.value.load(std::memory_order_acquire));
+            const size_t tail(enqueue_pos_.value.load(std::memory_order_acquire));
 
             if (head >= tail) {
                 return std::nullopt;
             }
 
-            const std::size_t span(((tail - head) < capacity_) ? (tail - head) : capacity_);
-            const std::size_t start_position(tail - 1);
+            const size_t span(((tail - head) < capacity_) ? (tail - head) : capacity_);
+            const size_t start_position(tail - 1);
 
-            // Mirrored view provides a linear walk over wrap-around without branchy index fixes.
-            const std::size_t mirrored_start((start_position & capacity_mask_) + capacity_);
+            // Mirrored view provides a linear walk over wrap-around without branched index fixes.
+            const size_t mirrored_start((start_position & capacity_mask_) + capacity_);
 
-            for (std::size_t offset{0}; offset < span; ++offset) {
-                const std::size_t position(start_position - offset);
+            for (size_t offset{0}; offset < span; ++offset) {
+                const size_t position(start_position - offset);
                 const Slot& slot(mirrored_slot_for(mirrored_start - offset));
 
                 if (std::optional<T> value(try_copy_slot_value(slot, position + 1));
@@ -290,11 +303,11 @@ namespace seraph {
             return std::nullopt;
         }
 
-        [[nodiscard]] auto empty() const noexcept -> bool {
+        [[nodiscard]] bool empty() const noexcept {
             return size_.value.load(std::memory_order_acquire) == 0;
         }
 
-        [[nodiscard]] auto size() const noexcept -> std::size_t {
+        [[nodiscard]] size_t size() const noexcept {
             return size_.value.load(std::memory_order_acquire);
         }
     };
