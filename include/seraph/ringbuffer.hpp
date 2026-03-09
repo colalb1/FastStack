@@ -104,6 +104,7 @@ namespace seraph {
             size_t position(enqueue_pos_.value.load(std::memory_order_relaxed));
             size_t spins{0};
 
+            // Intentionally unbounded: blocking producer API retries until a slot claim succeeds.
             while (true) {
                 Slot& slot(slot_for(position));
                 const size_t sequence(slot.sequence.load(std::memory_order_acquire));
@@ -131,7 +132,7 @@ namespace seraph {
         try_copy_slot_value(const Slot& slot, size_t expected_sequence) const {
             size_t retries{0};
 
-            while (true) {
+            while (retries < k_backoff_batch) {
                 if (slot.sequence.load(std::memory_order_acquire) != expected_sequence) {
                     return std::nullopt;
                 }
@@ -147,12 +148,11 @@ namespace seraph {
                     return std::nullopt;
                 }
 
-                if (++retries >= k_backoff_batch) {
-                    return std::nullopt;
-                }
-
+                ++retries;
                 cpu_relax_or_yield(retries);
             }
+
+            return std::nullopt;
         }
 
         size_t capacity_{0};
@@ -215,6 +215,8 @@ namespace seraph {
             size_t position(dequeue_pos_.value.load(std::memory_order_relaxed));
             size_t spins{0};
 
+            // Intentionally unbounded: retries under contention, exits on empty or successful
+            // claim.
             while (true) {
                 Slot& slot(slot_for(position));
                 const size_t sequence(slot.sequence.load(std::memory_order_acquire));
