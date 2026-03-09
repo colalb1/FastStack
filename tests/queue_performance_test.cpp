@@ -1061,6 +1061,7 @@ namespace {
 
     void write_mt_specialized_svg(
             const std::vector<BenchmarkAggregate>& aggregates,
+            std::string_view mode_prefix,
             const std::filesystem::path& output_path
     ) {
         std::map<std::string, std::vector<ContentionSeriesPoint>> series;
@@ -1070,11 +1071,8 @@ namespace {
         for (const auto& aggregate : aggregates) {
             int thread_count = 0;
             std::string key;
-            if (parse_mt_simple_op(aggregate.operation, "mt_push_only_t", thread_count)) {
-                key = aggregate.implementation + " push_only";
-            }
-            else if (parse_mt_simple_op(aggregate.operation, "mt_pop_only_t", thread_count)) {
-                key = aggregate.implementation + " pop_only";
+            if (parse_mt_simple_op(aggregate.operation, mode_prefix, thread_count)) {
+                key = aggregate.implementation;
             }
             else {
                 continue;
@@ -1113,10 +1111,12 @@ namespace {
             << height << "\" viewBox=\"0 0 " << width << " " << height << "\">\n";
         out << "<rect x=\"0\" y=\"0\" width=\"" << width << "\" height=\"" << height
             << "\" fill=\"#ffffff\"/>\n";
+        const std::string mode_label = (mode_prefix == "mt_push_only_t") ? "push_only" : "pop_only";
         out << "<text x=\"" << width / 2
             << "\" y=\"40\" text-anchor=\"middle\" font-size=\"26\" font-family=\"Menlo, "
                "monospace\" "
-               "fill=\"#111111\">queue Specialized Multithread Throughput (average ops/sec)</text>"
+               "fill=\"#111111\">queue Specialized Multithread Throughput ("
+            << mode_label << ", average ops/sec)</text>"
             << "\n";
         out << "<text x=\"28\" y=\"" << (margin_top + plot_h / 2.0)
             << "\" text-anchor=\"middle\" font-size=\"13\" font-family=\"Menlo, monospace\" "
@@ -1400,13 +1400,17 @@ int main(int argc, char** argv) {
     const auto csv_path = output_dir / "queue_benchmark_results.csv";
     const auto ns_svg_path = output_dir / "queue_ns_per_op.svg";
     const auto ops_svg_path = output_dir / "queue_ops_per_sec.svg";
-    const auto specialized_mt_svg_path = output_dir / "queue_specialized_mt_ops_per_sec.svg";
+    const auto specialized_mt_push_svg_path =
+            output_dir / "queue_specialized_mt_push_only_ops_per_sec.svg";
+    const auto specialized_mt_pop_svg_path =
+            output_dir / "queue_specialized_mt_pop_only_ops_per_sec.svg";
 
     write_results_csv(samples, aggregates, repeats, csv_path);
     write_svg_grouped_bars(aggregates, ns_svg_path, true);
     write_svg_grouped_bars(aggregates, ops_svg_path, false);
     const auto contention_svg_paths = write_contention_split_svgs(aggregates, output_dir);
-    write_mt_specialized_svg(aggregates, specialized_mt_svg_path);
+    write_mt_specialized_svg(aggregates, "mt_push_only_t", specialized_mt_push_svg_path);
+    write_mt_specialized_svg(aggregates, "mt_pop_only_t", specialized_mt_pop_svg_path);
     print_mt_comparison_summary(aggregates, "ringbuffer");
 
     std::cout << "queue/ringbuffer performance benchmark complete.\n";
@@ -1416,7 +1420,10 @@ int main(int argc, char** argv) {
     for (const auto& contention_path : contention_svg_paths) {
         std::cout << "Graph (contention ops/sec split, averaged): " << contention_path << "\n";
     }
-    std::cout << "Graph (specialized mt ops/sec, averaged): " << specialized_mt_svg_path << "\n";
+    std::cout << "Graph (specialized mt push_only ops/sec, averaged): "
+              << specialized_mt_push_svg_path << "\n";
+    std::cout << "Graph (specialized mt pop_only ops/sec, averaged): "
+              << specialized_mt_pop_svg_path << "\n";
     std::cout << "Sink: " << g_sink << "\n";
 
     return 0;
