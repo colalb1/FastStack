@@ -64,7 +64,7 @@ namespace seraph {
         static thread_local size_t hazard_ops_since_clear_;
         static thread_local std::vector<Node*> retire_list_;
 
-        static auto acquire_hazard(size_t slot) -> HazardRecord* {
+        static HazardRecord* acquire_hazard(size_t slot) {
             HazardRecord* hazard(local_hazards_[slot]);
 
             if (hazard) {
@@ -200,7 +200,7 @@ namespace seraph {
 
         std::atomic<Node*> head_{nullptr};
         std::atomic<Node*> tail_{nullptr};
-        std::atomic<std::size_t> size_{0};
+        std::atomic<size_t> size_{0};
 
       public:
         queue() {
@@ -216,7 +216,7 @@ namespace seraph {
         }
 
         queue(const queue&) = delete;
-        auto operator=(const queue&) -> queue& = delete;
+        queue& operator=(const queue&) = delete;
 
         void push(const T& value) {
             emplace(value);
@@ -281,7 +281,7 @@ namespace seraph {
             }
         }
 
-        [[nodiscard]] auto pop() -> std::optional<T> {
+        [[nodiscard]] std::optional<T> pop() {
             HazardRecord* hazard_head(acquire_hazard(0));
             HazardRecord* hazard_next(acquire_hazard(1));
 
@@ -333,7 +333,7 @@ namespace seraph {
             }
         }
 
-        [[nodiscard]] auto front() const -> std::optional<T> {
+        [[nodiscard]] std::optional<T> front() const {
             HazardRecord* hazard_head(acquire_hazard(0));
             HazardRecord* hazard_next(acquire_hazard(1));
 
@@ -363,7 +363,7 @@ namespace seraph {
             }
         }
 
-        [[nodiscard]] auto back() const -> std::optional<T> {
+        [[nodiscard]] std::optional<T> back() const {
             HazardRecord* hazard_curr(acquire_hazard(0));
             HazardRecord* hazard_next(acquire_hazard(1));
 
@@ -412,11 +412,11 @@ namespace seraph {
             }
         }
 
-        [[nodiscard]] auto empty() const noexcept -> bool {
+        [[nodiscard]] bool empty() const noexcept {
             return size_.load(std::memory_order_acquire) == 0;
         }
 
-        [[nodiscard]] auto size() const noexcept -> std::size_t {
+        [[nodiscard]] size_t size() const noexcept {
             return size_.load(std::memory_order_acquire);
         }
     };
