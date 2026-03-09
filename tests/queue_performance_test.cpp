@@ -12,7 +12,6 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
-#include <mutex>
 #include <optional>
 #include <queue>
 #include <sstream>
@@ -111,67 +110,6 @@ namespace {
         }
 
       private:
-        std::queue<int, std::deque<int>> data_;
-    };
-
-    class ThreadSafeSTLQueueAdapter {
-      public:
-        void push(const int& value) {
-            std::scoped_lock<std::mutex> guard(lock_);
-            data_.push(value);
-        }
-
-        void push(int&& value) {
-            std::scoped_lock<std::mutex> guard(lock_);
-            data_.push(std::move(value));
-        }
-
-        template <typename... Args> void emplace(Args&&... args) {
-            std::scoped_lock<std::mutex> guard(lock_);
-            data_.emplace(std::forward<Args>(args)...);
-        }
-
-        auto pop() -> std::optional<int> {
-            std::scoped_lock<std::mutex> guard(lock_);
-            if (data_.empty()) {
-                return std::nullopt;
-            }
-
-            int value = std::move(data_.front());
-            data_.pop();
-            return value;
-        }
-
-        auto front() const -> std::optional<int> {
-            std::scoped_lock<std::mutex> guard(lock_);
-            if (data_.empty()) {
-                return std::nullopt;
-            }
-
-            return data_.front();
-        }
-
-        auto back() const -> std::optional<int> {
-            std::scoped_lock<std::mutex> guard(lock_);
-            if (data_.empty()) {
-                return std::nullopt;
-            }
-
-            return data_.back();
-        }
-
-        auto empty() const noexcept -> bool {
-            std::scoped_lock<std::mutex> guard(lock_);
-            return data_.empty();
-        }
-
-        auto size() const noexcept -> size_t {
-            std::scoped_lock<std::mutex> guard(lock_);
-            return data_.size();
-        }
-
-      private:
-        mutable std::mutex lock_;
         std::queue<int, std::deque<int>> data_;
     };
 
@@ -687,9 +625,6 @@ namespace {
         if (impl == "queue") {
             return "#2a9d8f";
         }
-        if (impl == "MutexQueue") {
-            return "#457b9d";
-        }
         if (impl == "BoostQueue") {
             return "#6a4c93";
         }
@@ -730,7 +665,6 @@ namespace {
         const std::vector<std::string> preferred_order = {
                 "ringbuffer",
                 "queue",
-                "MutexQueue",
                 "BoostQueue",
         };
         std::sort(impls.begin(), impls.end(), [&](const std::string& lhs, const std::string& rhs) {
@@ -917,14 +851,17 @@ namespace {
         return palette[index % palette.size()];
     }
 
-    void write_contention_svg(
+    auto write_contention_split_svgs(
             const std::vector<BenchmarkAggregate>& aggregates,
-            const std::filesystem::path& output_path
-    ) {
-        std::map<std::string, std::vector<ContentionSeriesPoint>> series;
-        std::vector<int> thread_counts;
-        double max_ops = 0.0;
+            const std::filesystem::path& output_dir
+    ) -> std::vector<std::filesystem::path> {
+        struct SplitContentionData {
+            std::vector<int> thread_counts;
+            std::map<std::string, std::vector<ContentionSeriesPoint>> by_impl;
+            double max_ops_per_sec{0.0};
+        };
 
+        std::map<std::pair<int, int>, SplitContentionData> by_split;
         for (const auto& aggregate : aggregates) {
             int thread_count = 0;
             int push_percent = 0;
@@ -938,110 +875,173 @@ namespace {
                 continue;
             }
 
-            const std::string key = aggregate.implementation + " " + std::to_string(push_percent) +
-                                    "/" + std::to_string(pop_percent);
-            series[key].push_back(ContentionSeriesPoint{
+            SplitContentionData& split_data = by_split[{push_percent, pop_percent}];
+            split_data.by_impl[aggregate.implementation].push_back(ContentionSeriesPoint{
                     .thread_count = thread_count,
                     .avg_ops_per_second = aggregate.avg_ops_per_second,
             });
-            if (std::find(thread_counts.begin(), thread_counts.end(), thread_count) ==
-                thread_counts.end()) {
-                thread_counts.push_back(thread_count);
+            if (std::find(
+                        split_data.thread_counts.begin(),
+                        split_data.thread_counts.end(),
+                        thread_count
+                ) == split_data.thread_counts.end()) {
+                split_data.thread_counts.push_back(thread_count);
             }
-            max_ops = std::max(max_ops, aggregate.avg_ops_per_second);
-        }
-
-        std::sort(thread_counts.begin(), thread_counts.end());
-        for (auto& [_, points] : series) {
-            std::sort(points.begin(), points.end(), [](const auto& lhs, const auto& rhs) {
-                return lhs.thread_count < rhs.thread_count;
-            });
+            split_data.max_ops_per_sec =
+                    std::max(split_data.max_ops_per_sec, aggregate.avg_ops_per_second);
         }
 
         const int width = 1280;
         const int height = 720;
         const int margin_left = 90;
-        const int margin_right = 240;
+        const int margin_right = 260;
         const int margin_top = 80;
         const int margin_bottom = 90;
         const double plot_w = static_cast<double>(width - margin_left - margin_right);
         const double plot_h = static_cast<double>(height - margin_top - margin_bottom);
 
-        std::ofstream out(output_path);
-        out << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" << width << "\" height=\""
-            << height << "\" viewBox=\"0 0 " << width << " " << height << "\">\n";
-        out << "<rect x=\"0\" y=\"0\" width=\"" << width << "\" height=\"" << height
-            << "\" fill=\"#ffffff\"/>\n";
-        out << "<text x=\"" << width / 2
-            << "\" y=\"40\" text-anchor=\"middle\" font-size=\"26\" font-family=\"Menlo, "
-               "monospace\" "
-               "fill=\"#111111\">queue Contention Throughput (average ops/sec)</text>\n";
+        std::vector<std::filesystem::path> output_paths;
+        output_paths.reserve(by_split.size());
 
-        for (int tick = 0; tick <= 5; ++tick) {
-            const double ratio = static_cast<double>(tick) / 5.0;
-            const double y = margin_top + plot_h - ratio * plot_h;
-            const double value = ratio * max_ops;
-            out << "<line x1=\"" << margin_left << "\" y1=\"" << y << "\" x2=\""
-                << (width - margin_right) << "\" y2=\"" << y
-                << "\" stroke=\"#e0e0e0\" stroke-width=\"1\"/>\n";
-            out << "<text x=\"" << (margin_left - 10) << "\" y=\"" << (y + 4)
-                << "\" text-anchor=\"end\" font-size=\"12\" font-family=\"Menlo, monospace\" "
-                   "fill=\"#444444\">"
-                << format_metric(value) << "</text>\n";
-        }
+        for (auto& [split, split_data] : by_split) {
+            const int push_percent = split.first;
+            const int pop_percent = split.second;
 
-        out << "<line x1=\"" << margin_left << "\" y1=\"" << margin_top << "\" x2=\"" << margin_left
-            << "\" y2=\"" << (height - margin_bottom)
-            << "\" stroke=\"#222222\" stroke-width=\"2\"/>\n";
-        out << "<line x1=\"" << margin_left << "\" y1=\"" << (height - margin_bottom) << "\" x2=\""
-            << (width - margin_right) << "\" y2=\"" << (height - margin_bottom)
-            << "\" stroke=\"#222222\" stroke-width=\"2\"/>\n";
-
-        auto x_for_threads = [&](int threads) {
-            const auto it = std::find(thread_counts.begin(), thread_counts.end(), threads);
-            const size_t idx = static_cast<size_t>(std::distance(thread_counts.begin(), it));
-            const double frac = thread_counts.size() == 1
-                                        ? 0.0
-                                        : static_cast<double>(idx) /
-                                                  static_cast<double>(thread_counts.size() - 1);
-            return margin_left + frac * plot_w;
-        };
-
-        for (const int threads : thread_counts) {
-            const double x = x_for_threads(threads);
-            out << "<text x=\"" << x << "\" y=\"" << (height - margin_bottom + 20)
-                << "\" text-anchor=\"middle\" font-size=\"12\" font-family=\"Menlo, monospace\" "
-                   "fill=\"#222222\">"
-                << threads << "t</text>\n";
-        }
-
-        int legend_y = 90;
-        size_t series_index = 0;
-        for (const auto& [key, points] : series) {
-            const std::string color = color_for_series_index(series_index);
-
-            std::string polyline_points;
-            for (const auto& point : points) {
-                const double x = x_for_threads(point.thread_count);
-                const double ratio = (max_ops > 0.0) ? (point.avg_ops_per_second / max_ops) : 0.0;
-                const double y = margin_top + plot_h - ratio * plot_h;
-                polyline_points += std::to_string(x) + "," + std::to_string(y) + " ";
-                out << "<circle cx=\"" << x << "\" cy=\"" << y << "\" r=\"3.5\" fill=\"" << color
-                    << "\"/>\n";
+            std::sort(split_data.thread_counts.begin(), split_data.thread_counts.end());
+            for (auto& [_, points] : split_data.by_impl) {
+                std::sort(points.begin(), points.end(), [](const auto& lhs, const auto& rhs) {
+                    return lhs.thread_count < rhs.thread_count;
+                });
             }
-            out << "<polyline points=\"" << polyline_points << "\" fill=\"none\" stroke=\"" << color
-                << "\" stroke-width=\"2.5\"/>\n";
 
-            out << "<rect x=\"" << (width - margin_right + 20) << "\" y=\"" << (legend_y - 10)
-                << "\" width=\"14\" height=\"14\" fill=\"" << color << "\"/>\n";
-            out << "<text x=\"" << (width - margin_right + 40) << "\" y=\"" << legend_y
-                << "\" font-size=\"12\" font-family=\"Menlo, monospace\" fill=\"#222222\">" << key
-                << "</text>\n";
-            legend_y += 24;
-            ++series_index;
+            std::vector<std::string> impls;
+            impls.reserve(split_data.by_impl.size());
+            for (const auto& [impl, _] : split_data.by_impl) {
+                impls.push_back(impl);
+            }
+            const std::vector<std::string> preferred_order = {"ringbuffer", "queue", "BoostQueue"};
+            std::sort(
+                    impls.begin(),
+                    impls.end(),
+                    [&](const std::string& lhs, const std::string& rhs) {
+                        const auto lhs_it =
+                                std::find(preferred_order.begin(), preferred_order.end(), lhs);
+                        const auto rhs_it =
+                                std::find(preferred_order.begin(), preferred_order.end(), rhs);
+                        const size_t lhs_rank =
+                                lhs_it == preferred_order.end()
+                                        ? preferred_order.size()
+                                        : static_cast<size_t>(
+                                                  std::distance(preferred_order.begin(), lhs_it)
+                                          );
+                        const size_t rhs_rank =
+                                rhs_it == preferred_order.end()
+                                        ? preferred_order.size()
+                                        : static_cast<size_t>(
+                                                  std::distance(preferred_order.begin(), rhs_it)
+                                          );
+                        if (lhs_rank != rhs_rank) {
+                            return lhs_rank < rhs_rank;
+                        }
+                        return lhs < rhs;
+                    }
+            );
+
+            const auto output_path =
+                    output_dir / ("queue_contention_push" + std::to_string(push_percent) + "_pop" +
+                                  std::to_string(pop_percent) + "_ops_per_sec.svg");
+            output_paths.push_back(output_path);
+
+            std::ofstream out(output_path);
+            out << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" << width << "\" height=\""
+                << height << "\" viewBox=\"0 0 " << width << " " << height << "\">\n";
+            out << "<rect x=\"0\" y=\"0\" width=\"" << width << "\" height=\"" << height
+                << "\" fill=\"#ffffff\"/>\n";
+            out << "<text x=\"" << width / 2
+                << "\" y=\"40\" text-anchor=\"middle\" font-size=\"26\" font-family=\"Menlo, "
+                   "monospace\" fill=\"#111111\">queue Contention Throughput "
+                << push_percent << "/" << pop_percent << " (average ops/sec)</text>\n";
+
+            for (int tick = 0; tick <= 5; ++tick) {
+                const double ratio = static_cast<double>(tick) / 5.0;
+                const double y = margin_top + plot_h - ratio * plot_h;
+                const double value = ratio * split_data.max_ops_per_sec;
+                out << "<line x1=\"" << margin_left << "\" y1=\"" << y << "\" x2=\""
+                    << (width - margin_right) << "\" y2=\"" << y
+                    << "\" stroke=\"#e0e0e0\" stroke-width=\"1\"/>\n";
+                out << "<text x=\"" << (margin_left - 10) << "\" y=\"" << (y + 4)
+                    << "\" text-anchor=\"end\" font-size=\"12\" font-family=\"Menlo, monospace\" "
+                       "fill=\"#444444\">"
+                    << format_metric(value) << "</text>\n";
+            }
+
+            out << "<line x1=\"" << margin_left << "\" y1=\"" << margin_top << "\" x2=\""
+                << margin_left << "\" y2=\"" << (height - margin_bottom)
+                << "\" stroke=\"#222222\" stroke-width=\"2\"/>\n";
+            out << "<line x1=\"" << margin_left << "\" y1=\"" << (height - margin_bottom)
+                << "\" x2=\"" << (width - margin_right) << "\" y2=\"" << (height - margin_bottom)
+                << "\" stroke=\"#222222\" stroke-width=\"2\"/>\n";
+
+            auto x_for_threads = [&](int threads) {
+                const auto it = std::find(
+                        split_data.thread_counts.begin(),
+                        split_data.thread_counts.end(),
+                        threads
+                );
+                const size_t idx =
+                        static_cast<size_t>(std::distance(split_data.thread_counts.begin(), it));
+                const double frac =
+                        split_data.thread_counts.size() == 1
+                                ? 0.0
+                                : static_cast<double>(idx) /
+                                          static_cast<double>(split_data.thread_counts.size() - 1);
+                return margin_left + frac * plot_w;
+            };
+
+            for (const int threads : split_data.thread_counts) {
+                const double x = x_for_threads(threads);
+                out << "<text x=\"" << x << "\" y=\"" << (height - margin_bottom + 20)
+                    << "\" text-anchor=\"middle\" font-size=\"12\" font-family=\"Menlo, "
+                       "monospace\" "
+                       "fill=\"#222222\">"
+                    << threads << "t</text>\n";
+            }
+
+            int legend_y = 90;
+            for (const auto& impl : impls) {
+                const std::string color = color_for_impl(impl);
+                const auto points_it = split_data.by_impl.find(impl);
+                if (points_it == split_data.by_impl.end()) {
+                    continue;
+                }
+
+                std::string polyline_points;
+                for (const auto& point : points_it->second) {
+                    const double x = x_for_threads(point.thread_count);
+                    const double ratio =
+                            split_data.max_ops_per_sec > 0.0
+                                    ? point.avg_ops_per_second / split_data.max_ops_per_sec
+                                    : 0.0;
+                    const double y = margin_top + plot_h - ratio * plot_h;
+                    polyline_points += std::to_string(x) + "," + std::to_string(y) + " ";
+                    out << "<circle cx=\"" << x << "\" cy=\"" << y << "\" r=\"3.5\" fill=\""
+                        << color << "\"/>\n";
+                }
+                out << "<polyline points=\"" << polyline_points << "\" fill=\"none\" stroke=\""
+                    << color << "\" stroke-width=\"2.5\"/>\n";
+
+                out << "<rect x=\"" << (width - margin_right + 20) << "\" y=\"" << (legend_y - 10)
+                    << "\" width=\"14\" height=\"14\" fill=\"" << color << "\"/>\n";
+                out << "<text x=\"" << (width - margin_right + 40) << "\" y=\"" << legend_y
+                    << "\" font-size=\"12\" font-family=\"Menlo, monospace\" fill=\"#222222\">"
+                    << impl << "</text>\n";
+                legend_y += 24;
+            }
+
+            out << "</svg>\n";
         }
 
-        out << "</svg>\n";
+        return output_paths;
     }
 
     bool
@@ -1269,54 +1269,45 @@ int main(int argc, char** argv) {
 
     using SeraphQueue = seraph::queue<int>;
     using SeraphRingBuffer = RingBufferAdapter;
-    using MutexQueue = ThreadSafeSTLQueueAdapter;
 #if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
     using BoostQueue = BoostLockfreeQueueAdapter;
 #endif
 
     append_samples(bench_push_copy<SeraphRingBuffer>("ringbuffer", iterations, repeats));
     append_samples(bench_push_copy<SeraphQueue>("queue", iterations, repeats));
-    append_samples(bench_push_copy<MutexQueue>("MutexQueue", iterations, repeats));
 #if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
     append_samples(bench_push_copy<BoostQueue>("BoostQueue", iterations, repeats));
 #endif
 
     append_samples(bench_push_move<SeraphRingBuffer>("ringbuffer", iterations, repeats));
     append_samples(bench_push_move<SeraphQueue>("queue", iterations, repeats));
-    append_samples(bench_push_move<MutexQueue>("MutexQueue", iterations, repeats));
 #if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
     append_samples(bench_push_move<BoostQueue>("BoostQueue", iterations, repeats));
 #endif
 
     append_samples(bench_emplace<SeraphRingBuffer>("ringbuffer", iterations, repeats));
     append_samples(bench_emplace<SeraphQueue>("queue", iterations, repeats));
-    append_samples(bench_emplace<MutexQueue>("MutexQueue", iterations, repeats));
 #if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
     append_samples(bench_emplace<BoostQueue>("BoostQueue", iterations, repeats));
 #endif
 
     append_samples(bench_pop<SeraphRingBuffer>("ringbuffer", iterations, repeats));
     append_samples(bench_pop<SeraphQueue>("queue", iterations, repeats));
-    append_samples(bench_pop<MutexQueue>("MutexQueue", iterations, repeats));
 #if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
     append_samples(bench_pop<BoostQueue>("BoostQueue", iterations, repeats));
 #endif
 
     append_samples(bench_front<SeraphRingBuffer>("ringbuffer", iterations, repeats));
     append_samples(bench_front<SeraphQueue>("queue", iterations, repeats));
-    append_samples(bench_front<MutexQueue>("MutexQueue", iterations, repeats));
 
     append_samples(bench_back<SeraphRingBuffer>("ringbuffer", iterations, repeats));
     append_samples(bench_back<SeraphQueue>("queue", iterations, repeats));
-    append_samples(bench_back<MutexQueue>("MutexQueue", iterations, repeats));
 
     append_samples(bench_size<SeraphRingBuffer>("ringbuffer", iterations, repeats));
     append_samples(bench_size<SeraphQueue>("queue", iterations, repeats));
-    append_samples(bench_size<MutexQueue>("MutexQueue", iterations, repeats));
 
     append_samples(bench_empty<SeraphRingBuffer>("ringbuffer", iterations, repeats));
     append_samples(bench_empty<SeraphQueue>("queue", iterations, repeats));
-    append_samples(bench_empty<MutexQueue>("MutexQueue", iterations, repeats));
 #if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
     append_samples(bench_empty<BoostQueue>("BoostQueue", iterations, repeats));
 #else
@@ -1339,13 +1330,6 @@ int main(int argc, char** argv) {
             ));
             append_samples(bench_contention_mix<SeraphQueue>(
                     "queue",
-                    thread_count,
-                    push_percent,
-                    contention_ops_per_thread,
-                    repeats
-            ));
-            append_samples(bench_contention_mix<MutexQueue>(
-                    "MutexQueue",
                     thread_count,
                     push_percent,
                     contention_ops_per_thread,
@@ -1376,12 +1360,6 @@ int main(int argc, char** argv) {
                 specialized_ops_per_thread,
                 repeats
         ));
-        append_samples(bench_mt_push_only<MutexQueue>(
-                "MutexQueue",
-                thread_count,
-                specialized_ops_per_thread,
-                repeats
-        ));
 #if SERAPH_HAS_BOOST_LOCKFREE_QUEUE
         append_samples(bench_mt_push_only<BoostQueue>(
                 "BoostQueue",
@@ -1399,12 +1377,6 @@ int main(int argc, char** argv) {
         ));
         append_samples(bench_mt_pop_only<SeraphQueue>(
                 "queue",
-                thread_count,
-                specialized_ops_per_thread,
-                repeats
-        ));
-        append_samples(bench_mt_pop_only<MutexQueue>(
-                "MutexQueue",
                 thread_count,
                 specialized_ops_per_thread,
                 repeats
@@ -1428,13 +1400,12 @@ int main(int argc, char** argv) {
     const auto csv_path = output_dir / "queue_benchmark_results.csv";
     const auto ns_svg_path = output_dir / "queue_ns_per_op.svg";
     const auto ops_svg_path = output_dir / "queue_ops_per_sec.svg";
-    const auto contention_svg_path = output_dir / "queue_contention_ops_per_sec.svg";
     const auto specialized_mt_svg_path = output_dir / "queue_specialized_mt_ops_per_sec.svg";
 
     write_results_csv(samples, aggregates, repeats, csv_path);
     write_svg_grouped_bars(aggregates, ns_svg_path, true);
     write_svg_grouped_bars(aggregates, ops_svg_path, false);
-    write_contention_svg(aggregates, contention_svg_path);
+    const auto contention_svg_paths = write_contention_split_svgs(aggregates, output_dir);
     write_mt_specialized_svg(aggregates, specialized_mt_svg_path);
     print_mt_comparison_summary(aggregates, "ringbuffer");
 
@@ -1442,7 +1413,9 @@ int main(int argc, char** argv) {
     std::cout << "Results CSV: " << csv_path << "\n";
     std::cout << "Graph (ns/op, averaged): " << ns_svg_path << "\n";
     std::cout << "Graph (ops/sec, averaged): " << ops_svg_path << "\n";
-    std::cout << "Graph (contention ops/sec, averaged): " << contention_svg_path << "\n";
+    for (const auto& contention_path : contention_svg_paths) {
+        std::cout << "Graph (contention ops/sec split, averaged): " << contention_path << "\n";
+    }
     std::cout << "Graph (specialized mt ops/sec, averaged): " << specialized_mt_svg_path << "\n";
     std::cout << "Sink: " << g_sink << "\n";
 
