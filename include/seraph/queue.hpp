@@ -64,7 +64,7 @@ namespace seraph {
         static thread_local size_t hazard_ops_since_clear_;
         static thread_local std::vector<Node*> retire_list_;
 
-        static HazardRecord* acquire_hazard(size_t slot) {
+        static auto acquire_hazard(size_t slot) -> HazardRecord* {
             HazardRecord* hazard(local_hazards_[slot]);
 
             if (hazard) {
@@ -216,7 +216,7 @@ namespace seraph {
         }
 
         queue(const queue&) = delete;
-        queue& operator=(const queue&) = delete;
+        auto operator=(const queue&) -> queue& = delete;
 
         void push(const T& value) {
             emplace(value);
@@ -281,7 +281,7 @@ namespace seraph {
             }
         }
 
-        [[nodiscard]] std::optional<T> pop() {
+        [[nodiscard]] auto pop() -> std::optional<T> {
             HazardRecord* hazard_head(acquire_hazard(0));
             HazardRecord* hazard_next(acquire_hazard(1));
 
@@ -333,7 +333,7 @@ namespace seraph {
             }
         }
 
-        [[nodiscard]] std::optional<T> front() const {
+        [[nodiscard]] auto front() const -> std::optional<T> {
             HazardRecord* hazard_head(acquire_hazard(0));
             HazardRecord* hazard_next(acquire_hazard(1));
 
@@ -363,7 +363,7 @@ namespace seraph {
             }
         }
 
-        [[nodiscard]] std::optional<T> back() const {
+        [[nodiscard]] auto back() const -> std::optional<T> {
             HazardRecord* hazard_curr(acquire_hazard(0));
             HazardRecord* hazard_next(acquire_hazard(1));
 
@@ -412,11 +412,11 @@ namespace seraph {
             }
         }
 
-        [[nodiscard]] bool empty() const noexcept {
+        [[nodiscard]] auto empty() const noexcept -> bool {
             return size_.load(std::memory_order_acquire) == 0;
         }
 
-        [[nodiscard]] size_t size() const noexcept {
+        [[nodiscard]] auto size() const noexcept -> size_t {
             return size_.load(std::memory_order_acquire);
         }
     };

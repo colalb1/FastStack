@@ -54,7 +54,7 @@ namespace seraph {
             }
         }
 
-        [[nodiscard]] static size_t normalize_capacity(size_t requested) {
+        [[nodiscard]] static auto normalize_capacity(size_t requested) -> size_t {
             if (requested == 0) {
                 throw std::invalid_argument("RingBuffer capacity must be > 0.");
             }
@@ -68,26 +68,25 @@ namespace seraph {
             return capacity;
         }
 
-        [[nodiscard]] inline Slot& slot_for(size_t position) noexcept {
+        [[nodiscard]] auto slot_for(size_t position) noexcept -> Slot& {
             // With power-of-two capacity, masking is equivalent to modulo.
             return slots_[position & capacity_mask_];
         }
 
-        [[nodiscard]] inline const Slot& slot_for(size_t position) const noexcept {
+        [[nodiscard]] const Slot& slot_for(size_t position) const noexcept {
             return slots_[position & capacity_mask_];
         }
 
-        [[nodiscard]] inline const Slot& mirrored_slot_for(size_t mirrored_position
-        ) const noexcept {
+        [[nodiscard]] const Slot& mirrored_slot_for(size_t mirrored_position) const noexcept {
             return *(mirrored_slots_[mirrored_position & mirrored_mask_]);
         }
 
-        [[nodiscard]] inline static bool
+        [[nodiscard]] static bool
         slot_ready_for_enqueue(size_t sequence, size_t position) noexcept {
             return sequence == position;
         }
 
-        [[nodiscard]] inline bool try_claim_enqueue_position(size_t& position) noexcept {
+        [[nodiscard]] bool try_claim_enqueue_position(size_t& position) noexcept {
             return enqueue_pos_.value.compare_exchange_weak(
                     position,
                     position + 1,
@@ -96,7 +95,7 @@ namespace seraph {
             );
         }
 
-        inline void refresh_enqueue_position(size_t& position) const noexcept {
+        void refresh_enqueue_position(size_t& position) const noexcept {
             position = enqueue_pos_.value.load(std::memory_order_relaxed);
         }
 
