@@ -34,14 +34,14 @@ namespace {
     };
 
     struct OpRecord {
-        int id{0};
-        int thread_id{0};
+        size_t id{0};
+        size_t thread_id{0};
         OpKind kind{OpKind::push};
         int push_value{0};
-        std::optional<int> pop_result{};
-        std::optional<int> read_result{};
-        std::optional<size_t> size_result{};
-        std::optional<bool> empty_result{};
+        std::optional<int> pop_result;
+        std::optional<int> read_result;
+        std::optional<size_t> size_result;
+        std::optional<bool> empty_result;
         std::uint64_t start_tick{0};
         std::uint64_t end_tick{0};
     };
@@ -250,7 +250,7 @@ namespace {
 
             int next_push_value = trial * 1000;
             std::uniform_int_distribution<size_t> op_picker(0, allowed_ops.size() - 1);
-            for (int tid = 0; tid < thread_count; ++tid) {
+            for (size_t thread_id{0}; thread_id < thread_count; ++thread_id) {
                 for (int operation = 0; operation < ops_per_thread; ++operation) {
                     PlannedOp planned;
                     planned.kind = allowed_ops[op_picker(rng)];
@@ -260,7 +260,7 @@ namespace {
                     else {
                         planned.value = 0;
                     }
-                    plan[static_cast<size_t>(tid)].push_back(planned);
+                    plan[static_cast<size_t>(thread_id)].push_back(planned);
                 }
             }
 
@@ -275,18 +275,18 @@ namespace {
             std::vector<std::thread> workers;
             workers.reserve(static_cast<size_t>(thread_count));
 
-            for (int tid = 0; tid < thread_count; ++tid) {
-                workers.emplace_back([&, tid]() {
+            for (size_t thread_id{0}; thread_id < thread_count; ++thread_id) {
+                workers.emplace_back([&, thread_id]() {
                     sync_start.arrive_and_wait();
 
-                    const auto& ops = plan[static_cast<size_t>(tid)];
+                    const auto& operations = plan[static_cast<size_t>(thread_id)];
                     for (int operation = 0; operation < ops_per_thread; ++operation) {
-                        const PlannedOp& planned = ops[static_cast<size_t>(operation)];
-                        const int index = tid * ops_per_thread + operation;
+                        const PlannedOp& planned = operations[static_cast<size_t>(operation)];
+                        const int index = thread_id * ops_per_thread + operation;
 
                         OpRecord rec;
                         rec.id = index;
-                        rec.thread_id = tid;
+                        rec.thread_id = thread_id;
                         rec.kind = planned.kind;
                         rec.push_value = planned.value;
                         rec.start_tick = tick.fetch_add(1, std::memory_order_relaxed);
@@ -413,7 +413,7 @@ namespace {
         }
 
         // Queue has no top(); keep an explicit stub so shared test code compiles cleanly.
-        [[nodiscard]] auto top() -> std::optional<int> {
+        [[nodiscard]] static auto top() -> std::optional<int> {
             return std::nullopt;
         }
 
@@ -444,11 +444,11 @@ namespace {
         }
 
         // Stack has no front/back; keep explicit stubs so shared test code compiles cleanly.
-        [[nodiscard]] auto front() -> std::optional<int> {
+        [[nodiscard]] static auto front() -> std::optional<int> {
             return std::nullopt;
         }
 
-        [[nodiscard]] auto back() -> std::optional<int> {
+        [[nodiscard]] static auto back() -> std::optional<int> {
             return std::nullopt;
         }
 
@@ -485,7 +485,7 @@ namespace {
         }
 
         // RingBuffer has no top(); keep an explicit stub so shared test code compiles cleanly.
-        [[nodiscard]] auto top() -> std::optional<int> {
+        [[nodiscard]] static auto top() -> std::optional<int> {
             return std::nullopt;
         }
 
@@ -501,7 +501,7 @@ namespace {
         seraph::RingBuffer<int> ring_;
     };
 
-    bool run_sequential_sanity() {
+    auto run_sequential_sanity() -> bool {
         {
             QueueAdapter queue;
             if (!queue.empty() || queue.size() != 0) {
@@ -613,13 +613,13 @@ namespace {
             const std::vector<std::vector<PlannedOp>>& plan,
             AdapterFactory&& make_adapter
     ) -> bool {
-        const int thread_count = static_cast<int>(plan.size());
+        const size_t thread_count{plan.size()};
         if (thread_count == 0) {
             return false;
         }
 
-        const int ops_per_thread = static_cast<int>(plan.front().size());
-        const int total_ops = thread_count * ops_per_thread;
+        const size_t ops_per_thread(plan.front().size());
+        const size_t total_ops = thread_count * ops_per_thread;
         if (total_ops > 63) {
             std::cerr << "Planned history too large for checker.\n";
             return false;
@@ -633,18 +633,18 @@ namespace {
         std::vector<std::thread> workers;
         workers.reserve(static_cast<size_t>(thread_count));
 
-        for (int tid = 0; tid < thread_count; ++tid) {
-            workers.emplace_back([&, tid]() {
+        for (size_t thread_id{0}; thread_id < thread_count; ++thread_id) {
+            workers.emplace_back([&, thread_id]() -> void {
                 sync_start.arrive_and_wait();
 
-                const auto& ops = plan[static_cast<size_t>(tid)];
-                for (int operation = 0; operation < ops_per_thread; ++operation) {
-                    const PlannedOp& planned = ops[static_cast<size_t>(operation)];
-                    const int index = tid * ops_per_thread + operation;
+                const auto& operations = plan[static_cast<size_t>(thread_id)];
+                for (size_t operation{0}; operation < ops_per_thread; ++operation) {
+                    const PlannedOp& planned = operations[operation];
+                    const size_t index(operation + (thread_id * ops_per_thread));
 
                     OpRecord rec;
                     rec.id = index;
-                    rec.thread_id = tid;
+                    rec.thread_id = thread_id;
                     rec.kind = planned.kind;
                     rec.push_value = planned.value;
                     rec.start_tick = tick.fetch_add(1, std::memory_order_relaxed);
@@ -708,22 +708,22 @@ int main(int argc, char** argv) {
             trials = 20;
             continue;
         }
-        if (arg.rfind("--trials=", 0) == 0) {
+        if (arg.starts_with("--trials=")) {
             trials = std::stoi(arg.substr(9));
             continue;
         }
-        if (arg.rfind("--threads=", 0) == 0) {
+        if (arg.starts_with("--threads=")) {
             thread_count = std::stoi(arg.substr(10));
             continue;
         }
-        if (arg.rfind("--ops=", 0) == 0) {
+        if (arg.starts_with("--operations=")) {
             ops_per_thread = std::stoi(arg.substr(6));
             continue;
         }
     }
 
     if (trials <= 0 || thread_count <= 0 || ops_per_thread <= 0) {
-        std::cerr << "Invalid arguments: trials/threads/ops must be positive.\n";
+        std::cerr << "Invalid arguments: trials/threads/operations must be positive.\n";
         return 2;
     }
 
@@ -734,7 +734,7 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "Running linearizability model-checking histories: trials=" << trials
-              << ", threads=" << thread_count << ", ops/thread=" << ops_per_thread << "\n";
+              << ", threads=" << thread_count << ", operations/thread=" << ops_per_thread << "\n";
 
     if (!run_sequential_sanity()) {
         std::cerr << "Sequential sanity checks failed.\n";
@@ -753,8 +753,8 @@ int main(int argc, char** argv) {
                 thread_count,
                 ops_per_thread,
                 stack_ops,
-                []() {
-                    return StackAdapter();
+                []() -> StackAdapter {
+                    return {};
                 }
         )) {
         return 1;
@@ -771,8 +771,8 @@ int main(int argc, char** argv) {
                 thread_count,
                 ops_per_thread,
                 queue_ops,
-                []() {
-                    return QueueAdapter();
+                []() -> QueueAdapter {
+                    return {};
                 }
         )) {
         return 1;
@@ -789,7 +789,7 @@ int main(int argc, char** argv) {
                 thread_count,
                 ops_per_thread,
                 ringbuffer_ops,
-                []() {
+                []() -> RingBufferAdapter {
                     return RingBufferAdapter(128);
                 }
         )) {
@@ -814,7 +814,7 @@ int main(int argc, char** argv) {
         if (!run_phased_history<RingBufferAdapter, RingBufferBestEffortSpec>(
                     "ringbuffer_full_then_drain",
                     plan,
-                    []() {
+                    []() -> RingBufferAdapter {
                         return RingBufferAdapter(2);
                     }
             )) {
@@ -839,7 +839,7 @@ int main(int argc, char** argv) {
         if (!run_phased_history<RingBufferAdapter, RingBufferBestEffortSpec>(
                     "ringbuffer_empty_then_fill",
                     plan,
-                    []() {
+                    []() -> RingBufferAdapter {
                         return RingBufferAdapter(2);
                     }
             )) {
@@ -864,7 +864,7 @@ int main(int argc, char** argv) {
         if (!run_phased_history<RingBufferAdapter, RingBufferBestEffortSpec>(
                     "ringbuffer_peek_under_contention",
                     plan,
-                    []() {
+                    []() -> RingBufferAdapter {
                         return RingBufferAdapter(2);
                     }
             )) {
